@@ -8,6 +8,7 @@ import os from 'os'
 // import { LocalIndex } from 'vectra'
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { randomUUID } from 'crypto'
+import Tesseract from 'tesseract.js'
 
 // Phase 3: OpenAI Integration
 import dotenv from 'dotenv'
@@ -149,6 +150,41 @@ Please analyze this and provide a solution or explanation.`
   } catch (error) {
     console.error('OpenAI API error:', error)
     return `Error generating solution: ${error instanceof Error ? error.message : 'Unknown error'}`
+  }
+}
+
+// Real OCR using Tesseract.js
+async function performRealOCR(imageBuffer: Buffer): Promise<string> {
+  try {
+    console.log('Performing real OCR with Tesseract.js...')
+
+    // Convert buffer to base64 for Tesseract
+    const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`
+
+    const result = await Tesseract.recognize(
+      base64Image,
+      'eng',
+      {
+        logger: (m) => {
+          if (m.status === 'recognizing text') {
+            console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`)
+          }
+        }
+      }
+    )
+
+    const text = result.data.text.trim()
+    console.log('✅ Real OCR completed. Extracted text length:', text.length)
+
+    if (text.length === 0) {
+      console.log('⚠️ No text detected in image')
+      return '(No text detected in captured region)'
+    }
+
+    return text
+  } catch (error) {
+    console.error('OCR Error:', error)
+    throw error
   }
 }
 
@@ -330,12 +366,9 @@ app.whenReady().then(() => {
     console.log('Global shortcut registered successfully!')
   }
 
-  // Initialize Mock OCR (for Phase 1 demonstration)
-  console.log('Initializing Mock OCR...')
-  setTimeout(() => {
-    ocrReady = true
-    console.log('✅ Mock OCR ready! (Phase 1 - will be replaced with real OCR in Phase 3)')
-  }, 500)
+  // OCR is now on-demand using Tesseract.js
+  ocrReady = true
+  console.log('✅ Tesseract.js OCR ready (on-demand recognition)')
 
   // Initialize Phase 2 systems (in background)
   initializePhase2()
@@ -410,23 +443,10 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
     // Convert to PNG buffer
     const imageBuffer = croppedImage.toPNG()
 
-    // Perform Mock OCR
-    if (!ocrReady) {
-      throw new Error('OCR worker not initialized')
-    }
-
-    console.log('Performing Mock OCR...')
-    // Mock OCR: Generate sample text based on capture size
-    const mockTexts = [
-      "Error: Connection timeout\nPlease check your network settings and try again.",
-      "Warning: Low disk space\nYou have less than 10% free disk space remaining.",
-      "Success: Operation completed\nAll files have been processed successfully.",
-      "Database Error: Cannot connect to server\nCheck your database configuration in settings.",
-      "API Response: 404 Not Found\nThe requested endpoint does not exist."
-    ]
-    const text = mockTexts[Math.floor(Math.random() * mockTexts.length)]
-
-    console.log('Mock OCR completed. Text:', text)
+    // Perform Real OCR using Tesseract.js
+    console.log('Starting OCR...')
+    const text = await performRealOCR(imageBuffer)
+    console.log('OCR Result:', text.substring(0, 100) + (text.length > 100 ? '...' : ''))
 
     // Search for relevant documents
     const relevantDocs = searchDocuments(text, 3)

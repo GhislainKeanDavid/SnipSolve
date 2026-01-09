@@ -31,3 +31,6 @@ coverage/
 # Temporary files
 *.tmp
 .cache/
+
+# Tesseract.js language data
+*.traineddata

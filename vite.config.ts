@@ -23,7 +23,7 @@ export default defineConfig({
               ignoreDynamicRequires: true
             },
             rollupOptions: {
-              external: ['electron', 'sharp', 'pdf.js-extract', 'openai', /\.node$/],
+              external: ['electron', 'sharp', 'pdf.js-extract', 'openai', 'tesseract.js', /\.node$/],
               output: {
                 format: 'cjs'
               }
