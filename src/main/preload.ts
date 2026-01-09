@@ -13,5 +13,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('ocr-result', listener)
     }
-  }
+  },
+  // Document management
+  uploadDocument: () => ipcRenderer.invoke('upload-document'),
+  getDocuments: () => ipcRenderer.invoke('get-documents'),
+  deleteDocument: (docId: string) => ipcRenderer.invoke('delete-document', docId)
 })

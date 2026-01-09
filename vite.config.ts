@@ -19,8 +19,11 @@ export default defineConfig({
         vite: {
           build: {
             outDir: path.resolve(__dirname, 'dist-electron'),
+            commonjsOptions: {
+              ignoreDynamicRequires: true
+            },
             rollupOptions: {
-              external: ['electron'],
+              external: ['electron', 'sharp', 'pdf.js-extract', 'openai', /\.node$/],
               output: {
                 format: 'cjs'
               }
