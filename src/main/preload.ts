@@ -17,5 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Document management
   uploadDocument: () => ipcRenderer.invoke('upload-document'),
   getDocuments: () => ipcRenderer.invoke('get-documents'),
-  deleteDocument: (docId: string) => ipcRenderer.invoke('delete-document', docId)
+  deleteDocument: (docId: string) => ipcRenderer.invoke('delete-document', docId),
+  // Chat follow-up
+  chatFollowup: (request: {
+    message: string,
+    captureContext: { text: string, aiSolution: string, relevantDocs: any[] },
+    chatHistory: Array<{ role: 'user' | 'assistant', content: string }>
+  }) => ipcRenderer.invoke('chat-followup', request)
 })

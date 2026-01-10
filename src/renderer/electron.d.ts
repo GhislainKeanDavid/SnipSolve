@@ -35,6 +35,27 @@ export interface UploadResult {
   error?: string
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatFollowupRequest {
+  message: string
+  captureContext: {
+    text: string
+    aiSolution: string
+    relevantDocs: RelevantDoc[]
+  }
+  chatHistory: ChatMessage[]
+}
+
+export interface ChatFollowupResult {
+  success: boolean
+  reply?: string
+  error?: string
+}
+
 export interface ElectronAPI {
   hideOverlay: () => Promise<void>
   captureScreenshot: (bounds: { x: number; y: number; width: number; height: number }) => Promise<CaptureResult>
@@ -44,6 +65,8 @@ export interface ElectronAPI {
   uploadDocument: () => Promise<UploadResult>
   getDocuments: () => Promise<Document[]>
   deleteDocument: (docId: string) => Promise<void>
+  // Chat follow-up
+  chatFollowup: (request: ChatFollowupRequest) => Promise<ChatFollowupResult>
 }
 
 declare global {

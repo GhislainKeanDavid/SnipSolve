@@ -153,17 +153,17 @@ Please analyze this and provide a solution or explanation.`
   }
 }
 
-// Real OCR using Tesseract.js
+// Real OCR using Tesseract.js (English + Filipino for Taglish support)
 async function performRealOCR(imageBuffer: Buffer): Promise<string> {
   try {
-    console.log('Performing real OCR with Tesseract.js...')
+    console.log('Performing real OCR with Tesseract.js (eng+fil)...')
 
     // Convert buffer to base64 for Tesseract
     const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`
 
     const result = await Tesseract.recognize(
       base64Image,
-      'eng',
+      'eng+fil', // English + Filipino for Taglish support
       {
         logger: (m) => {
           if (m.status === 'recognizing text') {
@@ -481,6 +481,73 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
     }
   } catch (error) {
     console.error('Screenshot capture error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+})
+
+// Chat follow-up handler
+ipcMain.handle('chat-followup', async (event, data: {
+  message: string,
+  captureContext: {
+    text: string,
+    aiSolution: string,
+    relevantDocs: Array<{ docName: string; text: string; score: number }>
+  },
+  chatHistory: Array<{ role: 'user' | 'assistant', content: string }>
+}) => {
+  try {
+    console.log('Processing follow-up chat message...')
+
+    if (!openai) {
+      return {
+        success: false,
+        error: 'OpenAI not configured. Please add your API key to .env file.'
+      }
+    }
+
+    // Build the system prompt with capture context
+    const systemPrompt = `You are SnipSolve, a helpful assistant that provides solutions to technical problems.
+
+The user previously captured this from their screen:
+"${data.captureContext.text}"
+
+Your initial solution was:
+"${data.captureContext.aiSolution}"
+
+${data.captureContext.relevantDocs.length > 0 ? `
+Relevant documentation that was found:
+${data.captureContext.relevantDocs.map(doc => `[From ${doc.docName}]: ${doc.text}`).join('\n\n')}
+` : ''}
+
+The user is now asking a follow-up question. Help them with their question, referencing the original capture and documentation when relevant. Keep responses concise but helpful.`
+
+    // Build messages array with chat history
+    const messages: Array<{ role: 'system' | 'user' | 'assistant', content: string }> = [
+      { role: 'system', content: systemPrompt },
+      ...data.chatHistory,
+      { role: 'user', content: data.message }
+    ]
+
+    console.log('Sending follow-up to OpenAI...')
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: messages,
+      max_tokens: 500,
+      temperature: 0.7
+    })
+
+    const reply = response.choices[0]?.message?.content || 'No response generated.'
+    console.log('✅ Follow-up response generated')
+
+    return {
+      success: true,
+      reply: reply
+    }
+  } catch (error) {
+    console.error('Chat follow-up error:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
