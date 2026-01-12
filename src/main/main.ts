@@ -35,6 +35,79 @@ const METADATA_FILE = path.join(DATA_DIR, 'documents-metadata.json')
 const CHUNKS_FILE = path.join(DATA_DIR, 'document-chunks.json')
 const CAPTURES_FILE = path.join(DATA_DIR, 'captures.json')
 const CHATS_FILE = path.join(DATA_DIR, 'chats.json')
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json')
+
+// App settings
+interface AppSettings {
+  captureShortcut: string
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  captureShortcut: 'CommandOrControl+Shift+S'
+}
+
+let currentSettings: AppSettings = { ...DEFAULT_SETTINGS }
+
+// Load settings from disk
+async function loadSettings(): Promise<AppSettings> {
+  try {
+    if (existsSync(SETTINGS_FILE)) {
+      const data = await fs.readFile(SETTINGS_FILE, 'utf-8')
+      const settings = JSON.parse(data)
+      console.log('✅ Loaded settings from disk')
+      return { ...DEFAULT_SETTINGS, ...settings }
+    }
+  } catch (error) {
+    console.error('Failed to load settings:', error)
+  }
+  return { ...DEFAULT_SETTINGS }
+}
+
+// Save settings to disk
+async function saveSettings(settings: AppSettings): Promise<void> {
+  await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2))
+  console.log('💾 Saved settings to disk')
+}
+
+// Register the capture shortcut
+function registerCaptureShortcut(shortcut: string): boolean {
+  // Unregister all shortcuts first
+  globalShortcut.unregisterAll()
+
+  try {
+    const ret = globalShortcut.register(shortcut, () => {
+      console.log('Global shortcut triggered!')
+      if (overlayWindow) {
+        if (overlayWindow.isVisible()) {
+          overlayWindow.hide()
+          // Restore main window
+          if (mainWindow) {
+            mainWindow.restore()
+            mainWindow.show()
+          }
+        } else {
+          // Minimize main window to get it out of the way
+          if (mainWindow) {
+            mainWindow.minimize()
+          }
+          overlayWindow.show()
+          overlayWindow.focus()
+        }
+      }
+    })
+
+    if (ret) {
+      console.log(`✅ Shortcut registered: ${shortcut}`)
+      return true
+    } else {
+      console.log(`❌ Failed to register shortcut: ${shortcut}`)
+      return false
+    }
+  } catch (error) {
+    console.error(`❌ Error registering shortcut: ${error}`)
+    return false
+  }
+}
 
 // Initialize Phase 2 systems
 async function initializePhase2() {
@@ -371,37 +444,13 @@ function createOverlayWindow() {
   overlayWindow.hide()
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createMainWindow()
   createOverlayWindow()
 
-  // Register global shortcut: Ctrl/Cmd + Shift + S (do this first!)
-  const ret = globalShortcut.register('CommandOrControl+Shift+S', () => {
-    console.log('Global shortcut triggered!')
-    if (overlayWindow) {
-      if (overlayWindow.isVisible()) {
-        overlayWindow.hide()
-        // Restore main window
-        if (mainWindow) {
-          mainWindow.restore()
-          mainWindow.show()
-        }
-      } else {
-        // Minimize main window to get it out of the way
-        if (mainWindow) {
-          mainWindow.minimize()
-        }
-        overlayWindow.show()
-        overlayWindow.focus()
-      }
-    }
-  })
-
-  if (!ret) {
-    console.log('Global shortcut registration failed')
-  } else {
-    console.log('Global shortcut registered successfully!')
-  }
+  // Load settings and register shortcut
+  currentSettings = await loadSettings()
+  registerCaptureShortcut(currentSettings.captureShortcut)
 
   // OCR is now on-demand using Tesseract.js
   ocrReady = true
@@ -729,4 +778,23 @@ ipcMain.handle('load-chats', async () => {
 ipcMain.handle('save-chats', async (event, chats: any[]) => {
   await saveChats(chats)
   return { success: true }
+})
+
+// Settings: Get current settings
+ipcMain.handle('get-settings', async () => {
+  return currentSettings
+})
+
+// Settings: Update capture shortcut
+ipcMain.handle('set-capture-shortcut', async (event, shortcut: string) => {
+  const success = registerCaptureShortcut(shortcut)
+  if (success) {
+    currentSettings.captureShortcut = shortcut
+    await saveSettings(currentSettings)
+    return { success: true, shortcut }
+  } else {
+    // Re-register the old shortcut if new one failed
+    registerCaptureShortcut(currentSettings.captureShortcut)
+    return { success: false, error: 'Failed to register shortcut. It may be in use by another application.' }
+  }
 })

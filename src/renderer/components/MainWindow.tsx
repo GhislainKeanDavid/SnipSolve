@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import type { OCRResult, ChatMessage, ChatTab } from '../electron'
+import type { OCRResult, ChatMessage, ChatTab, AppSettings } from '../electron'
 
 interface Document {
   id: string
@@ -10,7 +10,7 @@ interface Document {
   chunks: number
 }
 
-type Tab = 'captures' | 'documents' | 'chat'
+type Tab = 'captures' | 'documents' | 'chat' | 'settings'
 
 function MainWindow() {
   const [activeTab, setActiveTab] = useState<Tab>('captures')
@@ -26,6 +26,15 @@ function MainWindow() {
   const [chatInput, setChatInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isLoaded, setIsLoaded] = useState(false)
+
+  // Settings state
+  const [settings, setSettings] = useState<AppSettings>({ captureShortcut: 'CommandOrControl+Shift+S' })
+  const [shortcutInput, setShortcutInput] = useState('')
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false)
+  const [shortcutError, setShortcutError] = useState('')
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Track if data has been modified (to avoid saving on initial load)
   const capturesModified = useRef(false)
@@ -48,6 +57,12 @@ function MainWindow() {
           setChatTabs(savedChats)
           console.log(`✅ Loaded ${savedChats.length} chat tabs`)
         }
+
+        // Load settings
+        const savedSettings = await window.electronAPI.getSettings()
+        setSettings(savedSettings)
+        setShortcutInput(savedSettings.captureShortcut)
+        console.log(`✅ Loaded settings`)
       } catch (error) {
         console.error('Failed to load persisted data:', error)
       } finally {
@@ -245,6 +260,79 @@ function MainWindow() {
     ? ocrResults.find(r => r.timestamp === activeChatTab.captureTimestamp)
     : null
 
+  // Handle keyboard shortcut recording
+  const handleShortcutKeyDown = (e: React.KeyboardEvent) => {
+    e.preventDefault()
+
+    const keys: string[] = []
+    if (e.ctrlKey || e.metaKey) keys.push('CommandOrControl')
+    if (e.altKey) keys.push('Alt')
+    if (e.shiftKey) keys.push('Shift')
+
+    // Add the actual key (excluding modifier keys themselves)
+    const key = e.key.toUpperCase()
+    if (!['CONTROL', 'ALT', 'SHIFT', 'META'].includes(key)) {
+      keys.push(key)
+    }
+
+    if (keys.length > 1) {
+      setShortcutInput(keys.join('+'))
+    }
+  }
+
+  const saveShortcut = async () => {
+    setShortcutError('')
+    const result = await window.electronAPI.setCaptureShortcut(shortcutInput)
+    if (result.success) {
+      setSettings(prev => ({ ...prev, captureShortcut: shortcutInput }))
+      setIsRecordingShortcut(false)
+    } else {
+      setShortcutError(result.error || 'Failed to set shortcut')
+    }
+  }
+
+  const resetShortcut = () => {
+    setShortcutInput(settings.captureShortcut)
+    setIsRecordingShortcut(false)
+    setShortcutError('')
+  }
+
+  // Clear functions
+  const clearAllCaptures = () => {
+    if (confirm('Are you sure you want to delete all captures? This cannot be undone.')) {
+      capturesModified.current = true
+      setOcrResults([])
+      window.electronAPI.saveCaptures([])
+    }
+  }
+
+  const clearAllChats = () => {
+    if (confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+      chatsModified.current = true
+      setChatTabs([{ id: 'general', type: 'general', title: 'General', chatHistory: [] }])
+      setActiveChatTabId('general')
+      window.electronAPI.saveChats([{ id: 'general', type: 'general', title: 'General', chatHistory: [] }])
+    }
+  }
+
+  const deleteCapture = (index: number) => {
+    capturesModified.current = true
+    setOcrResults(prev => prev.filter((_, i) => i !== index))
+  }
+
+  // Copy to clipboard
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+  }
+
+  // Filtered captures based on search
+  const filteredCaptures = searchQuery
+    ? ocrResults.filter(r =>
+        r.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.aiSolution.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : ocrResults
+
   return (
     <div className="min-h-screen bg-gray-100">
       <div className="container mx-auto p-8">
@@ -257,7 +345,7 @@ function MainWindow() {
           <h2 className="text-2xl font-semibold text-gray-800 mb-4">How to Use</h2>
           <div className="space-y-2 text-gray-700">
             <p>1. Upload your company documentation (PDFs or text files)</p>
-            <p>2. Press <kbd className="px-2 py-1 bg-gray-200 rounded">Ctrl + Shift + S</kbd> to capture screen region</p>
+            <p>2. Press <kbd className="px-2 py-1 bg-gray-200 rounded">{settings.captureShortcut.replace('CommandOrControl', 'Ctrl').replace(/\+/g, ' + ')}</kbd> to capture screen region</p>
             <p>3. Click and drag to select an error message or text</p>
             <p>4. Get instant solutions from your uploaded docs</p>
           </div>
@@ -296,19 +384,62 @@ function MainWindow() {
             >
               Chat
             </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`pb-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'settings'
+                  ? 'border-gray-500 text-gray-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Settings
+            </button>
           </nav>
         </div>
 
         {/* Captures Tab */}
         {activeTab === 'captures' && (
           <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-4">OCR Results</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-semibold text-gray-800">OCR Results</h2>
+              {ocrResults.length > 0 && (
+                <button
+                  onClick={clearAllCaptures}
+                  className="px-3 py-1 text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
+
+            {/* Search Bar */}
+            {ocrResults.length > 0 && (
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search captures by text or AI solution..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {searchQuery && (
+                  <p className="text-sm text-gray-500 mt-1">
+                    Found {filteredCaptures.length} of {ocrResults.length} captures
+                  </p>
+                )}
+              </div>
+            )}
+
             {ocrResults.length === 0 ? (
-              <p className="text-gray-500 italic">No captures yet. Use Ctrl+Shift+S to start capturing!</p>
+              <p className="text-gray-500 italic">No captures yet. Use {settings.captureShortcut.replace('CommandOrControl', 'Ctrl')} to start capturing!</p>
+            ) : filteredCaptures.length === 0 ? (
+              <p className="text-gray-500 italic">No captures match your search.</p>
             ) : (
               <div className="space-y-4">
-                {ocrResults.map((result, index) => (
-                  <div key={index} className="border border-gray-200 rounded p-4 bg-gray-50">
+                {filteredCaptures.map((result, index) => {
+                  const originalIndex = ocrResults.findIndex(r => r.timestamp === result.timestamp)
+                  return (
+                  <div key={result.timestamp} className="border border-gray-200 rounded p-4 bg-gray-50">
                     {/* Captured Image */}
                     {result.image && (
                       <div className="mb-3 bg-white border border-gray-200 rounded p-3">
@@ -320,19 +451,27 @@ function MainWindow() {
                       </div>
                     )}
 
-                    {/* AI Solution with Ask Follow-up button */}
+                    {/* AI Solution with Ask Follow-up and Copy buttons */}
                     {result.aiSolution && (
                       <div className="mb-3">
                         <div className="flex justify-between items-center mb-2">
                           <p className="text-xs font-semibold text-green-600">
                             🤖 AI Solution:
                           </p>
-                          <button
-                            onClick={() => openCaptureChat(result.timestamp, ocrResults.length - index)}
-                            className="px-3 py-1 rounded-md text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors"
-                          >
-                            💬 Ask Follow-up
-                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => copyToClipboard(result.aiSolution)}
+                              className="px-2 py-1 rounded-md text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                            >
+                              📋 Copy
+                            </button>
+                            <button
+                              onClick={() => openCaptureChat(result.timestamp, ocrResults.length - originalIndex)}
+                              className="px-3 py-1 rounded-md text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors"
+                            >
+                              💬 Ask Follow-up
+                            </button>
+                          </div>
                         </div>
                         <div className="bg-green-50 border border-green-200 rounded p-3">
                           <p className="text-sm text-gray-800 whitespace-pre-wrap">{result.aiSolution}</p>
@@ -369,29 +508,48 @@ function MainWindow() {
                     {/* Capture Info */}
                     <div className="pt-3 border-t border-gray-300">
                       <div className="flex justify-between items-start">
-                        <p className="text-sm text-gray-500">Capture #{ocrResults.length - index}</p>
-                        <p className="text-xs text-gray-400">
-                          {new Date(result.timestamp).toLocaleTimeString()}
-                        </p>
+                        <div>
+                          <p className="text-sm text-gray-500">Capture #{ocrResults.length - originalIndex}</p>
+                          <p className="text-xs text-gray-500">
+                            Region: {result.bounds.width} x {result.bounds.height} px
+                            at ({result.bounds.x}, {result.bounds.y})
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-gray-400">
+                            {new Date(result.timestamp).toLocaleTimeString()}
+                          </p>
+                          <button
+                            onClick={() => deleteCapture(originalIndex)}
+                            className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500">
-                        Region: {result.bounds.width} x {result.bounds.height} px
-                        at ({result.bounds.x}, {result.bounds.y})
-                      </p>
                       {/* Captured Text (collapsible) */}
                       <details className="mt-2">
                         <summary className="text-xs font-semibold text-gray-600 cursor-pointer hover:text-gray-800">
                           View Captured Text
                         </summary>
-                        <div className="mt-2 bg-white border border-gray-200 rounded p-3">
-                          <p className="text-gray-800 font-mono text-sm whitespace-pre-wrap">
+                        <div className="mt-2 bg-white border border-gray-200 rounded p-3 flex justify-between items-start">
+                          <p className="text-gray-800 font-mono text-sm whitespace-pre-wrap flex-1">
                             {result.text || '(No text detected)'}
                           </p>
+                          {result.text && (
+                            <button
+                              onClick={() => copyToClipboard(result.text)}
+                              className="ml-2 px-2 py-1 rounded-md text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                            >
+                              📋
+                            </button>
+                          )}
                         </div>
                       </details>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -574,6 +732,108 @@ function MainWindow() {
               ) : (
                 <p className="text-gray-500 text-center py-8">No chat tab selected</p>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-2xl font-semibold text-gray-800 mb-6">Settings</h2>
+
+            {/* Keyboard Shortcut */}
+            <div className="mb-8">
+              <h3 className="text-lg font-medium text-gray-800 mb-3">Capture Shortcut</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Press a key combination to set the shortcut for screen capture.
+              </p>
+
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={shortcutInput}
+                    onKeyDown={handleShortcutKeyDown}
+                    onFocus={() => setIsRecordingShortcut(true)}
+                    onBlur={() => !shortcutInput && resetShortcut()}
+                    readOnly
+                    placeholder="Click and press keys..."
+                    className={`w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                      isRecordingShortcut
+                        ? 'border-blue-500 focus:ring-blue-500 bg-blue-50'
+                        : 'border-gray-300 focus:ring-gray-500'
+                    }`}
+                  />
+                  {shortcutError && (
+                    <p className="text-sm text-red-600 mt-1">{shortcutError}</p>
+                  )}
+                </div>
+
+                {shortcutInput !== settings.captureShortcut && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={saveShortcut}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={resetShortcut}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-gray-500 mt-2">
+                Current shortcut: <kbd className="px-2 py-1 bg-gray-100 rounded">{settings.captureShortcut.replace('CommandOrControl', 'Ctrl')}</kbd>
+              </p>
+            </div>
+
+            {/* Data Management */}
+            <div className="mb-8">
+              <h3 className="text-lg font-medium text-gray-800 mb-3">Data Management</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Manage your captured data and chat history.
+              </p>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={clearAllCaptures}
+                  disabled={ocrResults.length === 0}
+                  className={`px-4 py-2 rounded-md font-medium ${
+                    ocrResults.length === 0
+                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      : 'bg-red-100 text-red-700 hover:bg-red-200'
+                  }`}
+                >
+                  Clear All Captures ({ocrResults.length})
+                </button>
+                <button
+                  onClick={clearAllChats}
+                  disabled={chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0}
+                  className={`px-4 py-2 rounded-md font-medium ${
+                    chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0
+                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      : 'bg-red-100 text-red-700 hover:bg-red-200'
+                  }`}
+                >
+                  Clear All Chats ({chatTabs.length} tabs)
+                </button>
+              </div>
+            </div>
+
+            {/* About */}
+            <div>
+              <h3 className="text-lg font-medium text-gray-800 mb-3">About</h3>
+              <p className="text-sm text-gray-600">
+                SnipSolve - Overlay RAG Tool for instant documentation search
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Data stored in: ~/.snipsolve/
+              </p>
             </div>
           </div>
         )}

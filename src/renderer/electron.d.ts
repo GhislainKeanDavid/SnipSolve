@@ -64,6 +64,16 @@ export interface ChatTab {
   chatHistory: ChatMessage[]
 }
 
+export interface AppSettings {
+  captureShortcut: string
+}
+
+export interface SetShortcutResult {
+  success: boolean
+  shortcut?: string
+  error?: string
+}
+
 export interface ElectronAPI {
   hideOverlay: () => Promise<void>
   captureScreenshot: (bounds: { x: number; y: number; width: number; height: number }) => Promise<CaptureResult>
@@ -80,6 +90,9 @@ export interface ElectronAPI {
   saveCaptures: (captures: OCRResult[]) => Promise<{ success: boolean }>
   loadChats: () => Promise<ChatTab[]>
   saveChats: (chats: ChatTab[]) => Promise<{ success: boolean }>
+  // Settings
+  getSettings: () => Promise<AppSettings>
+  setCaptureShortcut: (shortcut: string) => Promise<SetShortcutResult>
 }
 
 declare global {

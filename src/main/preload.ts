@@ -28,5 +28,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadCaptures: () => ipcRenderer.invoke('load-captures'),
   saveCaptures: (captures: any[]) => ipcRenderer.invoke('save-captures', captures),
   loadChats: () => ipcRenderer.invoke('load-chats'),
-  saveChats: (chats: any[]) => ipcRenderer.invoke('save-chats', chats)
+  saveChats: (chats: any[]) => ipcRenderer.invoke('save-chats', chats),
+  // Settings
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  setCaptureShortcut: (shortcut: string) => ipcRenderer.invoke('set-capture-shortcut', shortcut)
 })
