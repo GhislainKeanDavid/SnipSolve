@@ -23,5 +23,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     message: string,
     captureContext: { text: string, aiSolution: string, relevantDocs: any[] },
     chatHistory: Array<{ role: 'user' | 'assistant', content: string }>
-  }) => ipcRenderer.invoke('chat-followup', request)
+  }) => ipcRenderer.invoke('chat-followup', request),
+  // Persistence
+  loadCaptures: () => ipcRenderer.invoke('load-captures'),
+  saveCaptures: (captures: any[]) => ipcRenderer.invoke('save-captures', captures),
+  loadChats: () => ipcRenderer.invoke('load-chats'),
+  saveChats: (chats: any[]) => ipcRenderer.invoke('save-chats', chats)
 })

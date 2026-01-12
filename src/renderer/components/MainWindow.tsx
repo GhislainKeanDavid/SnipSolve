@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import type { OCRResult, ChatMessage } from '../electron'
+import { useState, useEffect, useRef } from 'react'
+import type { OCRResult, ChatMessage, ChatTab } from '../electron'
 
 interface Document {
   id: string
@@ -11,15 +11,6 @@ interface Document {
 }
 
 type Tab = 'captures' | 'documents' | 'chat'
-
-// Chat tab structure (browser-style)
-interface ChatTab {
-  id: string
-  type: 'general' | 'capture'
-  captureTimestamp?: string
-  title: string
-  chatHistory: ChatMessage[]
-}
 
 function MainWindow() {
   const [activeTab, setActiveTab] = useState<Tab>('captures')
@@ -34,19 +25,66 @@ function MainWindow() {
   const [activeChatTabId, setActiveChatTabId] = useState<string>('general')
   const [chatInput, setChatInput] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [isLoaded, setIsLoaded] = useState(false)
 
+  // Track if data has been modified (to avoid saving on initial load)
+  const capturesModified = useRef(false)
+  const chatsModified = useRef(false)
+
+  // Load persisted data on startup
   useEffect(() => {
+    const loadPersistedData = async () => {
+      try {
+        // Load captures
+        const savedCaptures = await window.electronAPI.loadCaptures()
+        if (savedCaptures.length > 0) {
+          setOcrResults(savedCaptures)
+          console.log(`✅ Loaded ${savedCaptures.length} captures`)
+        }
+
+        // Load chat tabs
+        const savedChats = await window.electronAPI.loadChats()
+        if (savedChats.length > 0) {
+          setChatTabs(savedChats)
+          console.log(`✅ Loaded ${savedChats.length} chat tabs`)
+        }
+      } catch (error) {
+        console.error('Failed to load persisted data:', error)
+      } finally {
+        setIsLoaded(true)
+      }
+    }
+
+    loadPersistedData()
+    loadDocuments()
+
     // Listen for OCR results
     const cleanup = window.electronAPI.onOCRResult((result) => {
-      setOcrResults(prev => [result, ...prev])
+      setOcrResults(prev => {
+        capturesModified.current = true
+        return [result, ...prev]
+      })
     })
-
-    // Load existing documents
-    loadDocuments()
 
     // Cleanup listener when component unmounts
     return cleanup
   }, [])
+
+  // Save captures when they change (after initial load)
+  useEffect(() => {
+    if (isLoaded && capturesModified.current) {
+      window.electronAPI.saveCaptures(ocrResults)
+      capturesModified.current = false
+    }
+  }, [ocrResults, isLoaded])
+
+  // Save chats when they change (after initial load)
+  useEffect(() => {
+    if (isLoaded && chatsModified.current) {
+      window.electronAPI.saveChats(chatTabs)
+      chatsModified.current = false
+    }
+  }, [chatTabs, isLoaded])
 
   const loadDocuments = async () => {
     try {
@@ -108,6 +146,7 @@ function MainWindow() {
         title: `Capture #${captureNumber}`,
         chatHistory: initialHistory
       }
+      chatsModified.current = true
       setChatTabs(prev => [...prev, newTab])
       setActiveChatTabId(tabId)
     }
@@ -117,6 +156,7 @@ function MainWindow() {
   const closeChatTab = (tabId: string) => {
     if (tabId === 'general') return // Can't close general tab
 
+    chatsModified.current = true
     setChatTabs(prev => prev.filter(t => t.id !== tabId))
 
     // If closing active tab, switch to general
@@ -136,6 +176,7 @@ function MainWindow() {
 
     // Add user message to chat history
     const updatedHistory: ChatMessage[] = [...currentChatTab.chatHistory, { role: 'user', content: message }]
+    chatsModified.current = true
     setChatTabs(prev => prev.map(t =>
       t.id === activeChatTabId ? { ...t, chatHistory: updatedHistory } : t
     ))
@@ -172,12 +213,14 @@ function MainWindow() {
       })
 
       if (response.success && response.reply) {
+        chatsModified.current = true
         setChatTabs(prev => prev.map(t =>
           t.id === activeChatTabId
             ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: response.reply! }] }
             : t
         ))
       } else {
+        chatsModified.current = true
         setChatTabs(prev => prev.map(t =>
           t.id === activeChatTabId
             ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: `Error: ${response.error || 'Failed to get response'}` }] }
@@ -186,6 +229,7 @@ function MainWindow() {
       }
     } catch (error) {
       console.error('Chat error:', error)
+      chatsModified.current = true
       setChatTabs(prev => prev.map(t =>
         t.id === activeChatTabId
           ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: 'Error: Failed to send message' }] }

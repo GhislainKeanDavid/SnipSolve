@@ -33,6 +33,8 @@ const VECTOR_STORE_DIR = path.join(DATA_DIR, 'vectorstore')
 const DOCUMENTS_DIR = path.join(DATA_DIR, 'documents')
 const METADATA_FILE = path.join(DATA_DIR, 'documents-metadata.json')
 const CHUNKS_FILE = path.join(DATA_DIR, 'document-chunks.json')
+const CAPTURES_FILE = path.join(DATA_DIR, 'captures.json')
+const CHATS_FILE = path.join(DATA_DIR, 'chats.json')
 
 // Initialize Phase 2 systems
 async function initializePhase2() {
@@ -82,6 +84,41 @@ async function saveMetadata() {
 async function saveChunks() {
   const obj = Object.fromEntries(documentChunks)
   await fs.writeFile(CHUNKS_FILE, JSON.stringify(obj, null, 2))
+}
+
+// Save captures to disk
+async function saveCaptures(captures: any[]) {
+  await fs.writeFile(CAPTURES_FILE, JSON.stringify(captures, null, 2))
+  console.log(`💾 Saved ${captures.length} captures to disk`)
+}
+
+// Load captures from disk
+async function loadCaptures(): Promise<any[]> {
+  if (existsSync(CAPTURES_FILE)) {
+    const data = await fs.readFile(CAPTURES_FILE, 'utf-8')
+    const captures = JSON.parse(data)
+    console.log(`✅ Loaded ${captures.length} captures from disk`)
+    return captures
+  }
+  return []
+}
+
+// Save chat tabs to disk
+async function saveChats(chats: any[]) {
+  await fs.writeFile(CHATS_FILE, JSON.stringify(chats, null, 2))
+  console.log(`💾 Saved ${chats.length} chat tabs to disk`)
+}
+
+// Load chat tabs from disk
+async function loadChats(): Promise<any[]> {
+  if (existsSync(CHATS_FILE)) {
+    const data = await fs.readFile(CHATS_FILE, 'utf-8')
+    const chats = JSON.parse(data)
+    console.log(`✅ Loaded ${chats.length} chat tabs from disk`)
+    return chats
+  }
+  // Return default General tab if no chats saved
+  return [{ id: 'general', type: 'general', title: 'General', chatHistory: [] }]
 }
 
 // Phase 3: Initialize OpenAI
@@ -670,4 +707,26 @@ ipcMain.handle('delete-document', async (event, docId: string) => {
     console.error('Document deletion error:', error)
     throw error
   }
+})
+
+// Persistence: Load captures
+ipcMain.handle('load-captures', async () => {
+  return await loadCaptures()
+})
+
+// Persistence: Save captures
+ipcMain.handle('save-captures', async (event, captures: any[]) => {
+  await saveCaptures(captures)
+  return { success: true }
+})
+
+// Persistence: Load chat tabs
+ipcMain.handle('load-chats', async () => {
+  return await loadChats()
+})
+
+// Persistence: Save chat tabs
+ipcMain.handle('save-chats', async (event, chats: any[]) => {
+  await saveChats(chats)
+  return { success: true }
 })

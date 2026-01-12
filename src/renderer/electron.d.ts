@@ -56,6 +56,14 @@ export interface ChatFollowupResult {
   error?: string
 }
 
+export interface ChatTab {
+  id: string
+  type: 'general' | 'capture'
+  captureTimestamp?: string
+  title: string
+  chatHistory: ChatMessage[]
+}
+
 export interface ElectronAPI {
   hideOverlay: () => Promise<void>
   captureScreenshot: (bounds: { x: number; y: number; width: number; height: number }) => Promise<CaptureResult>
@@ -67,6 +75,11 @@ export interface ElectronAPI {
   deleteDocument: (docId: string) => Promise<void>
   // Chat follow-up
   chatFollowup: (request: ChatFollowupRequest) => Promise<ChatFollowupResult>
+  // Persistence
+  loadCaptures: () => Promise<OCRResult[]>
+  saveCaptures: (captures: OCRResult[]) => Promise<{ success: boolean }>
+  loadChats: () => Promise<ChatTab[]>
+  saveChats: (chats: ChatTab[]) => Promise<{ success: boolean }>
 }
 
 declare global {
