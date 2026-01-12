@@ -418,6 +418,8 @@ function createOverlayWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
+    hasShadow: false,
+    backgroundColor: '#00000000', // Fully transparent background
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

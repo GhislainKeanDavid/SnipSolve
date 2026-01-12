@@ -1,5 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import type { OCRResult, ChatMessage, ChatTab, AppSettings } from '../electron'
+import {
+  FileText,
+  MessageSquare,
+  History,
+  Settings,
+  Plus,
+  Upload,
+  Sparkles,
+  Command,
+  ArrowRight,
+  Search,
+  Trash2,
+  Copy,
+  X
+} from 'lucide-react'
 
 interface Document {
   id: string
@@ -10,10 +25,10 @@ interface Document {
   chunks: number
 }
 
-type Tab = 'captures' | 'documents' | 'chat' | 'settings'
+type Tab = 'home' | 'captures' | 'documents' | 'chat' | 'settings'
 
 function MainWindow() {
-  const [activeTab, setActiveTab] = useState<Tab>('captures')
+  const [activeTab, setActiveTab] = useState<Tab>('home')
   const [ocrResults, setOcrResults] = useState<OCRResult[]>([])
   const [documents, setDocuments] = useState<Document[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
@@ -79,6 +94,8 @@ function MainWindow() {
         capturesModified.current = true
         return [result, ...prev]
       })
+      // Switch to captures tab when new capture arrives
+      setActiveTab('captures')
     })
 
     // Cleanup listener when component unmounts
@@ -138,14 +155,11 @@ function MainWindow() {
     const existingTab = chatTabs.find(t => t.id === tabId)
 
     if (existingTab) {
-      // Tab already exists, switch to it
       setActiveChatTabId(tabId)
     } else {
-      // Find the capture to get its AI solution
       const capture = ocrResults.find(r => r.timestamp === captureTimestamp)
       const initialHistory: ChatMessage[] = []
 
-      // Add AI solution as the first message if available
       if (capture?.aiSolution) {
         initialHistory.push({
           role: 'assistant',
@@ -153,7 +167,6 @@ function MainWindow() {
         })
       }
 
-      // Create new tab for this capture with AI solution as first message
       const newTab: ChatTab = {
         id: tabId,
         type: 'capture',
@@ -169,12 +182,11 @@ function MainWindow() {
   }
 
   const closeChatTab = (tabId: string) => {
-    if (tabId === 'general') return // Can't close general tab
+    if (tabId === 'general') return
 
     chatsModified.current = true
     setChatTabs(prev => prev.filter(t => t.id !== tabId))
 
-    // If closing active tab, switch to general
     if (activeChatTabId === tabId) {
       setActiveChatTabId('general')
     }
@@ -189,7 +201,6 @@ function MainWindow() {
 
     setIsSending(true)
 
-    // Add user message to chat history
     const updatedHistory: ChatMessage[] = [...currentChatTab.chatHistory, { role: 'user', content: message }]
     chatsModified.current = true
     setChatTabs(prev => prev.map(t =>
@@ -198,7 +209,6 @@ function MainWindow() {
     setChatInput('')
 
     try {
-      // Build context based on tab type
       let captureContext: { text: string, aiSolution: string, relevantDocs: any[] }
 
       if (currentChatTab.type === 'capture' && currentChatTab.captureTimestamp) {
@@ -213,12 +223,7 @@ function MainWindow() {
           captureContext = { text: '', aiSolution: '', relevantDocs: [] }
         }
       } else {
-        // General chat - no capture context, just KB
-        captureContext = {
-          text: '',
-          aiSolution: '',
-          relevantDocs: []
-        }
+        captureContext = { text: '', aiSolution: '', relevantDocs: [] }
       }
 
       const response = await window.electronAPI.chatFollowup({
@@ -269,7 +274,6 @@ function MainWindow() {
     if (e.altKey) keys.push('Alt')
     if (e.shiftKey) keys.push('Shift')
 
-    // Add the actual key (excluding modifier keys themselves)
     const key = e.key.toUpperCase()
     if (!['CONTROL', 'ALT', 'SHIFT', 'META'].includes(key)) {
       keys.push(key)
@@ -320,7 +324,6 @@ function MainWindow() {
     setOcrResults(prev => prev.filter((_, i) => i !== index))
   }
 
-  // Copy to clipboard
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
   }
@@ -333,293 +336,458 @@ function MainWindow() {
       )
     : ocrResults
 
+  // Format shortcut for display
+  const formatShortcut = (shortcut: string) => {
+    return shortcut
+      .replace('CommandOrControl', 'Ctrl')
+      .split('+')
+  }
+
+  const shortcutKeys = formatShortcut(settings.captureShortcut)
+
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="container mx-auto p-8">
-        <header className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2">SnipSolve</h1>
-          <p className="text-gray-600">Overlay RAG Tool for instant documentation search</p>
-        </header>
+    <div className="flex h-screen bg-[#0b0b0b] text-gray-100">
+      {/* Sidebar */}
+      <aside className="w-16 bg-[#0f0f0f] border-r border-gray-800 flex flex-col items-center py-6 space-y-6">
+        {/* Logo */}
+        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center mb-8">
+          <Sparkles className="w-6 h-6 text-white" />
+        </div>
 
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-2xl font-semibold text-gray-800 mb-4">How to Use</h2>
-          <div className="space-y-2 text-gray-700">
-            <p>1. Upload your company documentation (PDFs or text files)</p>
-            <p>2. Press <kbd className="px-2 py-1 bg-gray-200 rounded">{settings.captureShortcut.replace('CommandOrControl', 'Ctrl').replace(/\+/g, ' + ')}</kbd> to capture screen region</p>
-            <p>3. Click and drag to select an error message or text</p>
-            <p>4. Get instant solutions from your uploaded docs</p>
+        {/* Navigation Icons */}
+        <nav className="flex-1 flex flex-col space-y-4">
+          <button
+            onClick={() => setActiveTab('home')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'home'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Home"
+          >
+            <Command className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setActiveTab('captures')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'captures'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Captures"
+          >
+            <History className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setActiveTab('documents')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'documents'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Documents"
+          >
+            <FileText className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'chat'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Chat"
+          >
+            <MessageSquare className="w-5 h-5" />
+          </button>
+        </nav>
+
+        {/* Settings at bottom */}
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+            activeTab === 'settings'
+              ? 'bg-indigo-600 text-white'
+              : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+          }`}
+          title="Settings"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {/* Home Tab */}
+        {activeTab === 'home' && (
+          <div className="flex-1 flex flex-col items-center justify-center px-8 overflow-y-auto">
+            {/* Hero Section */}
+            <div className="text-center mb-12 max-w-3xl">
+              <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+                SnipSolve
+              </h1>
+              <p className="text-xl text-gray-400">
+                Your documentation, instantly accessible.
+              </p>
+              <p className="text-sm text-gray-500 mt-2">
+                Capture any screen region to instantly search your docs.
+              </p>
+            </div>
+
+            {/* Knowledge Base Empty State */}
+            {documents.length === 0 && (
+              <div className="mb-8 w-full max-w-2xl">
+                <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl p-6 flex items-center justify-between">
+                  <div className="flex items-center space-x-4">
+                    <div className="w-12 h-12 bg-amber-500/20 rounded-lg flex items-center justify-center">
+                      <Upload className="w-6 h-6 text-amber-400" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Knowledge Base Empty</h3>
+                      <p className="text-sm text-gray-400">
+                        Upload your PDFs or SOPs to enable AI context.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleUploadDocument}
+                    disabled={isProcessing}
+                    className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium rounded-lg transition-all duration-200 flex items-center space-x-2 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{isProcessing ? 'Processing...' : 'Add Knowledge Base'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Action Cards Container */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl">
+              {/* Primary Action: Snip & Solve */}
+              <div className="md:col-span-2">
+                <div className="group relative bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-10 overflow-hidden cursor-pointer transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl hover:shadow-indigo-500/30">
+                  {/* Animated background effect */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/0 to-purple-600/0 group-hover:from-indigo-500/20 group-hover:to-purple-600/20 transition-all duration-500" />
+
+                  {/* Content */}
+                  <div className="relative z-10 text-center">
+                    {/* Icon */}
+                    <div className="w-16 h-16 mx-auto mb-6 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-sm border border-white/20 group-hover:scale-110 transition-transform duration-300">
+                      <Command className="w-8 h-8 text-white" />
+                    </div>
+
+                    {/* Title */}
+                    <h2 className="text-3xl font-bold text-white mb-3">
+                      Snip & Solve
+                    </h2>
+
+                    {/* Description */}
+                    <p className="text-indigo-100 mb-6 text-lg">
+                      Capture any screen region to instantly search your docs.
+                    </p>
+
+                    {/* Keyboard Shortcut Display */}
+                    <div className="flex items-center justify-center space-x-2 mb-4">
+                      <span className="text-sm text-indigo-200 uppercase tracking-wider">Press</span>
+                      <div className="flex items-center space-x-1">
+                        {shortcutKeys.map((key, idx) => (
+                          <span key={idx} className="flex items-center">
+                            {idx > 0 && <span className="text-white font-bold mx-1">+</span>}
+                            <kbd className="px-3 py-2 bg-white/20 backdrop-blur-md border border-white/30 rounded-lg text-white font-mono text-sm shadow-lg">
+                              {key}
+                            </kbd>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Hover indicator */}
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                      <ArrowRight className="w-6 h-6 mx-auto text-white animate-pulse" />
+                    </div>
+                  </div>
+
+                  {/* Decorative elements */}
+                  <div className="absolute -top-20 -right-20 w-40 h-40 bg-white/5 rounded-full blur-3xl" />
+                  <div className="absolute -bottom-20 -left-20 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl" />
+                </div>
+              </div>
+
+              {/* Secondary Action: AI Chat Assistant */}
+              <div className="md:col-span-2">
+                <div
+                  onClick={() => setActiveTab('chat')}
+                  className="group relative bg-[#1a1a1a] border border-gray-800 rounded-xl p-8 cursor-pointer transition-all duration-300 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/10"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                        <MessageSquare className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-semibold text-white mb-1">
+                          Ask AI Assistant
+                        </h3>
+                        <p className="text-sm text-gray-400">
+                          Chat without capturing your screen
+                        </p>
+                      </div>
+                    </div>
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ArrowRight className="w-5 h-5 text-indigo-400" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer hint */}
+            <div className="mt-12 text-center text-sm text-gray-600">
+              <p>
+                Start by uploading your documentation or press{' '}
+                <kbd className="px-2 py-1 bg-gray-800 rounded text-gray-400 font-mono">
+                  {shortcutKeys.join(' + ')}
+                </kbd>{' '}
+                to begin
+              </p>
+            </div>
           </div>
-        </div>
-
-        {/* Main Tabs */}
-        <div className="mb-6 border-b border-gray-200">
-          <nav className="flex space-x-8">
-            <button
-              onClick={() => setActiveTab('captures')}
-              className={`pb-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'captures'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Captures
-            </button>
-            <button
-              onClick={() => setActiveTab('documents')}
-              className={`pb-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'documents'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Documents ({documents.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`pb-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'chat'
-                  ? 'border-purple-500 text-purple-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Chat
-            </button>
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`pb-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'settings'
-                  ? 'border-gray-500 text-gray-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Settings
-            </button>
-          </nav>
-        </div>
+        )}
 
         {/* Captures Tab */}
         {activeTab === 'captures' && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-semibold text-gray-800">OCR Results</h2>
-              {ocrResults.length > 0 && (
-                <button
-                  onClick={clearAllCaptures}
-                  className="px-3 py-1 text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
-                >
-                  Clear All
-                </button>
-              )}
-            </div>
-
-            {/* Search Bar */}
-            {ocrResults.length > 0 && (
-              <div className="mb-4">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search captures by text or AI solution..."
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {searchQuery && (
-                  <p className="text-sm text-gray-500 mt-1">
-                    Found {filteredCaptures.length} of {ocrResults.length} captures
-                  </p>
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-4xl mx-auto">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold text-white">Captures</h2>
+                {ocrResults.length > 0 && (
+                  <button
+                    onClick={clearAllCaptures}
+                    className="px-4 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Clear All
+                  </button>
                 )}
               </div>
-            )}
 
-            {ocrResults.length === 0 ? (
-              <p className="text-gray-500 italic">No captures yet. Use {settings.captureShortcut.replace('CommandOrControl', 'Ctrl')} to start capturing!</p>
-            ) : filteredCaptures.length === 0 ? (
-              <p className="text-gray-500 italic">No captures match your search.</p>
-            ) : (
-              <div className="space-y-4">
-                {filteredCaptures.map((result, index) => {
-                  const originalIndex = ocrResults.findIndex(r => r.timestamp === result.timestamp)
-                  return (
-                  <div key={result.timestamp} className="border border-gray-200 rounded p-4 bg-gray-50">
-                    {/* Captured Image */}
-                    {result.image && (
-                      <div className="mb-3 bg-white border border-gray-200 rounded p-3">
-                        <img
-                          src={result.image}
-                          alt="Captured screenshot"
-                          className="max-w-full h-auto border border-gray-300 rounded"
-                        />
-                      </div>
-                    )}
+              {/* Search Bar */}
+              {ocrResults.length > 0 && (
+                <div className="mb-6 relative">
+                  <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search captures by text or AI solution..."
+                    className="w-full pl-12 pr-4 py-3 bg-[#1a1a1a] border border-gray-800 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                  />
+                  {searchQuery && (
+                    <p className="text-sm text-gray-500 mt-2">
+                      Found {filteredCaptures.length} of {ocrResults.length} captures
+                    </p>
+                  )}
+                </div>
+              )}
 
-                    {/* AI Solution with Ask Follow-up and Copy buttons */}
-                    {result.aiSolution && (
-                      <div className="mb-3">
-                        <div className="flex justify-between items-center mb-2">
-                          <p className="text-xs font-semibold text-green-600">
-                            🤖 AI Solution:
-                          </p>
-                          <div className="flex gap-2">
+              {ocrResults.length === 0 ? (
+                <div className="text-center py-16">
+                  <div className="w-16 h-16 mx-auto mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
+                    <History className="w-8 h-8 text-gray-600" />
+                  </div>
+                  <p className="text-gray-500 mb-2">No captures yet</p>
+                  <p className="text-sm text-gray-600">
+                    Press <kbd className="px-2 py-1 bg-gray-800 rounded text-gray-400 font-mono">{shortcutKeys.join(' + ')}</kbd> to capture
+                  </p>
+                </div>
+              ) : filteredCaptures.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">No captures match your search.</p>
+              ) : (
+                <div className="space-y-4">
+                  {filteredCaptures.map((result) => {
+                    const originalIndex = ocrResults.findIndex(r => r.timestamp === result.timestamp)
+                    return (
+                      <div key={result.timestamp} className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-6 hover:border-gray-700 transition-colors">
+                        {/* Captured Image */}
+                        {result.image && (
+                          <div className="mb-4 bg-[#0f0f0f] rounded-lg p-3">
+                            <img
+                              src={result.image}
+                              alt="Captured screenshot"
+                              className="max-w-full h-auto rounded-lg border border-gray-800"
+                            />
+                          </div>
+                        )}
+
+                        {/* AI Solution */}
+                        {result.aiSolution && (
+                          <div className="mb-4">
+                            <div className="flex justify-between items-center mb-2">
+                              <p className="text-sm font-medium text-indigo-400">AI Solution</p>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => copyToClipboard(result.aiSolution)}
+                                  className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors flex items-center gap-1"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  Copy
+                                </button>
+                                <button
+                                  onClick={() => openCaptureChat(result.timestamp, ocrResults.length - originalIndex)}
+                                  className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-1"
+                                >
+                                  <MessageSquare className="w-3 h-3" />
+                                  Follow-up
+                                </button>
+                              </div>
+                            </div>
+                            <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-4">
+                              <p className="text-sm text-gray-200 whitespace-pre-wrap">{result.aiSolution}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Relevant Docs */}
+                        {result.relevantDocs && result.relevantDocs.length > 0 && (
+                          <div className="mb-4">
+                            <p className="text-sm font-medium text-blue-400 mb-2">
+                              Relevant Documentation ({result.relevantDocs.length})
+                            </p>
+                            <div className="space-y-2">
+                              {result.relevantDocs.map((doc, docIndex) => (
+                                <div key={docIndex} className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                                  <div className="flex justify-between items-start mb-1">
+                                    <p className="text-xs font-medium text-blue-300">{doc.docName}</p>
+                                    <span className="text-xs text-blue-400">Score: {doc.score}</span>
+                                  </div>
+                                  <p className="text-xs text-gray-400 whitespace-pre-wrap">{doc.text}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Capture Info */}
+                        <div className="flex justify-between items-center pt-4 border-t border-gray-800">
+                          <div>
+                            <p className="text-sm text-gray-400">Capture #{ocrResults.length - originalIndex}</p>
+                            <p className="text-xs text-gray-600">
+                              {result.bounds.width} x {result.bounds.height} px
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <p className="text-xs text-gray-600">
+                              {new Date(result.timestamp).toLocaleString()}
+                            </p>
                             <button
-                              onClick={() => copyToClipboard(result.aiSolution)}
-                              className="px-2 py-1 rounded-md text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                              onClick={() => deleteCapture(originalIndex)}
+                              className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                             >
-                              📋 Copy
-                            </button>
-                            <button
-                              onClick={() => openCaptureChat(result.timestamp, ocrResults.length - originalIndex)}
-                              className="px-3 py-1 rounded-md text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors"
-                            >
-                              💬 Ask Follow-up
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
-                        <div className="bg-green-50 border border-green-200 rounded p-3">
-                          <p className="text-sm text-gray-800 whitespace-pre-wrap">{result.aiSolution}</p>
-                        </div>
-                      </div>
-                    )}
 
-                    {/* Relevant Documentation */}
-                    {result.relevantDocs && result.relevantDocs.length > 0 && (
-                      <div className="mb-3">
-                        <p className="text-xs font-semibold text-blue-600 mb-2">
-                          📚 Relevant Documentation ({result.relevantDocs.length} found):
-                        </p>
-                        <div className="space-y-2">
-                          {result.relevantDocs.map((doc, docIndex) => (
-                            <div key={docIndex} className="bg-blue-50 border border-blue-200 rounded p-3">
-                              <div className="flex justify-between items-start mb-1">
-                                <p className="text-xs font-medium text-blue-800">{doc.docName}</p>
-                                <span className="text-xs text-blue-600">Score: {doc.score}</span>
-                              </div>
-                              <p className="text-xs text-gray-700 whitespace-pre-wrap">{doc.text}</p>
-                            </div>
-                          ))}
-                        </div>
+                        {/* Captured Text (collapsible) */}
+                        <details className="mt-4">
+                          <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-400">
+                            View Captured Text
+                          </summary>
+                          <div className="mt-2 bg-[#0f0f0f] rounded-lg p-3 flex justify-between items-start">
+                            <p className="text-gray-300 font-mono text-sm whitespace-pre-wrap flex-1">
+                              {result.text || '(No text detected)'}
+                            </p>
+                            {result.text && (
+                              <button
+                                onClick={() => copyToClipboard(result.text)}
+                                className="ml-2 p-2 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
+                              >
+                                <Copy className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </details>
                       </div>
-                    )}
-
-                    {result.relevantDocs && result.relevantDocs.length === 0 && (
-                      <div className="mb-3">
-                        <p className="text-xs text-gray-500 italic">No relevant documentation found</p>
-                      </div>
-                    )}
-
-                    {/* Capture Info */}
-                    <div className="pt-3 border-t border-gray-300">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="text-sm text-gray-500">Capture #{ocrResults.length - originalIndex}</p>
-                          <p className="text-xs text-gray-500">
-                            Region: {result.bounds.width} x {result.bounds.height} px
-                            at ({result.bounds.x}, {result.bounds.y})
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-xs text-gray-400">
-                            {new Date(result.timestamp).toLocaleTimeString()}
-                          </p>
-                          <button
-                            onClick={() => deleteCapture(originalIndex)}
-                            className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                      {/* Captured Text (collapsible) */}
-                      <details className="mt-2">
-                        <summary className="text-xs font-semibold text-gray-600 cursor-pointer hover:text-gray-800">
-                          View Captured Text
-                        </summary>
-                        <div className="mt-2 bg-white border border-gray-200 rounded p-3 flex justify-between items-start">
-                          <p className="text-gray-800 font-mono text-sm whitespace-pre-wrap flex-1">
-                            {result.text || '(No text detected)'}
-                          </p>
-                          {result.text && (
-                            <button
-                              onClick={() => copyToClipboard(result.text)}
-                              className="ml-2 px-2 py-1 rounded-md text-xs font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
-                            >
-                              📋
-                            </button>
-                          )}
-                        </div>
-                      </details>
-                    </div>
-                  </div>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* Documents Tab */}
         {activeTab === 'documents' && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-semibold text-gray-800">Knowledge Base</h2>
-              <button
-                onClick={handleUploadDocument}
-                disabled={isProcessing}
-                className={`px-4 py-2 rounded-md text-white font-medium ${
-                  isProcessing
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700'
-                }`}
-              >
-                {isProcessing ? 'Processing...' : '+ Upload Document'}
-              </button>
-            </div>
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-4xl mx-auto">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold text-white">Knowledge Base</h2>
+                <button
+                  onClick={handleUploadDocument}
+                  disabled={isProcessing}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                  {isProcessing ? 'Processing...' : 'Upload Document'}
+                </button>
+              </div>
 
-            {documents.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-gray-500 mb-4">No documents uploaded yet</p>
-                <p className="text-sm text-gray-400">
-                  Upload PDFs or text files containing your company SOPs, documentation, or knowledge base
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {documents.map((doc) => (
-                  <div key={doc.id} className="flex items-center justify-between border border-gray-200 rounded p-4 hover:bg-gray-50">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-800">{doc.name}</p>
-                      <p className="text-sm text-gray-500">
-                        {doc.type.toUpperCase()} • {doc.chunks} chunks • Uploaded {new Date(doc.uploadedAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteDocument(doc.id)}
-                      className="ml-4 px-3 py-1 text-sm text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
-                    >
-                      Delete
-                    </button>
+              {documents.length === 0 ? (
+                <div className="text-center py-16">
+                  <div className="w-16 h-16 mx-auto mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
+                    <FileText className="w-8 h-8 text-gray-600" />
                   </div>
-                ))}
-              </div>
-            )}
+                  <p className="text-gray-500 mb-2">No documents uploaded yet</p>
+                  <p className="text-sm text-gray-600">
+                    Upload PDFs or text files to enable AI context
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {documents.map((doc) => (
+                    <div key={doc.id} className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-4 flex items-center justify-between hover:border-gray-700 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-indigo-500/20 rounded-lg flex items-center justify-center">
+                          <FileText className="w-5 h-5 text-indigo-400" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-white">{doc.name}</p>
+                          <p className="text-sm text-gray-500">
+                            {doc.type.toUpperCase()} • {doc.chunks} chunks • {new Date(doc.uploadedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteDocument(doc.id)}
+                        className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* Chat Tab */}
         {activeTab === 'chat' && (
-          <div className="bg-white rounded-lg shadow-md">
-            {/* Browser-style Chat Tabs */}
-            <div className="flex items-center border-b border-gray-200 bg-gray-50 rounded-t-lg px-2 pt-2">
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Chat Tabs */}
+            <div className="flex items-center border-b border-gray-800 bg-[#0f0f0f] px-2 pt-2">
               {chatTabs.map((tab) => (
                 <div
                   key={tab.id}
                   className={`flex items-center gap-2 px-4 py-2 rounded-t-lg cursor-pointer border-t border-l border-r transition-colors ${
                     activeChatTabId === tab.id
-                      ? 'bg-white border-gray-200 -mb-px'
-                      : 'bg-gray-100 border-transparent hover:bg-gray-200'
+                      ? 'bg-[#1a1a1a] border-gray-800 -mb-px text-white'
+                      : 'bg-transparent border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
                   }`}
                   onClick={() => setActiveChatTabId(tab.id)}
                 >
                   <span className="text-sm font-medium truncate max-w-[120px]">
-                    {tab.type === 'general' ? '💬 General' : `📷 ${tab.title}`}
+                    {tab.type === 'general' ? 'General' : tab.title}
                   </span>
                   {tab.type !== 'general' && (
                     <button
@@ -627,9 +795,9 @@ function MainWindow() {
                         e.stopPropagation()
                         closeChatTab(tab.id)
                       }}
-                      className="text-gray-400 hover:text-gray-600 hover:bg-gray-300 rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                      className="text-gray-500 hover:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center hover:bg-gray-700"
                     >
-                      ✕
+                      <X className="w-3 h-3" />
                     </button>
                   )}
                 </div>
@@ -637,22 +805,22 @@ function MainWindow() {
             </div>
 
             {/* Chat Content */}
-            <div className="p-6">
+            <div className="flex-1 flex flex-col overflow-hidden p-6">
               {activeChatTab ? (
-                <div className="flex flex-col">
-                  {/* Chat Header with Context */}
+                <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+                  {/* Chat Header */}
                   {activeChatTab.type === 'capture' && activeCaptureForChat && (
-                    <div className="mb-4 pb-4 border-b border-gray-200">
+                    <div className="mb-4 pb-4 border-b border-gray-800">
                       <div className="flex items-start gap-4">
                         {activeCaptureForChat.image && (
                           <img
                             src={activeCaptureForChat.image}
                             alt="Capture context"
-                            className="w-24 h-auto border border-gray-300 rounded"
+                            className="w-20 h-auto rounded-lg border border-gray-800"
                           />
                         )}
-                        <div className="flex-1">
-                          <h3 className="text-sm font-semibold text-gray-800 mb-1">
+                        <div>
+                          <h3 className="text-sm font-semibold text-white mb-1">
                             {activeChatTab.title} - Follow-up Chat
                           </h3>
                           <p className="text-xs text-gray-500">
@@ -664,10 +832,8 @@ function MainWindow() {
                   )}
 
                   {activeChatTab.type === 'general' && (
-                    <div className="mb-4 pb-4 border-b border-gray-200">
-                      <h3 className="text-sm font-semibold text-gray-800 mb-1">
-                        💬 General Chat
-                      </h3>
+                    <div className="mb-4 pb-4 border-b border-gray-800">
+                      <h3 className="text-sm font-semibold text-white mb-1">General Chat</h3>
                       <p className="text-xs text-gray-500">
                         Ask questions about your uploaded documentation
                       </p>
@@ -675,31 +841,35 @@ function MainWindow() {
                   )}
 
                   {/* Chat Messages */}
-                  <div className="min-h-[300px] max-h-[400px] overflow-y-auto mb-4 space-y-3">
+                  <div className="flex-1 overflow-y-auto mb-4 space-y-4">
                     {activeChatTab.chatHistory.length === 0 && activeChatTab.type === 'general' && (
-                      <p className="text-gray-500 text-center py-8">
-                        Ask any question about your documentation...
-                      </p>
+                      <div className="text-center py-16">
+                        <div className="w-16 h-16 mx-auto mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
+                          <MessageSquare className="w-8 h-8 text-gray-600" />
+                        </div>
+                        <p className="text-gray-500">Ask any question about your documentation...</p>
+                      </div>
                     )}
                     {activeChatTab.chatHistory.map((msg, msgIndex) => (
                       <div
                         key={msgIndex}
-                        className={`p-3 rounded-lg ${
-                          msg.role === 'user'
-                            ? 'bg-purple-100 text-purple-900 ml-12'
-                            : 'bg-gray-100 text-gray-800 mr-12'
-                        }`}
+                        className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                       >
-                        <p className="text-xs font-medium mb-1">
-                          {msg.role === 'user' ? '👤 You' : '🤖 AI'}
-                        </p>
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        <div
+                          className={`max-w-[80%] p-4 rounded-2xl ${
+                            msg.role === 'user'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-[#1a1a1a] border border-gray-800 text-gray-200'
+                          }`}
+                        >
+                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        </div>
                       </div>
                     ))}
                   </div>
 
-                  {/* Chat Input - Always visible */}
-                  <div className="flex gap-2 pt-4 border-t border-gray-200">
+                  {/* Chat Input */}
+                  <div className="flex gap-3">
                     <input
                       type="text"
                       value={chatInput}
@@ -714,16 +884,12 @@ function MainWindow() {
                         ? "Ask about your documentation..."
                         : "Ask a follow-up question..."}
                       disabled={isSending}
-                      className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100"
+                      className="flex-1 px-4 py-3 bg-[#1a1a1a] border border-gray-800 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50 transition-colors"
                     />
                     <button
                       onClick={handleSendMessage}
                       disabled={isSending || !chatInput.trim()}
-                      className={`px-6 py-2 rounded-md font-medium text-white ${
-                        isSending || !chatInput.trim()
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-purple-600 hover:bg-purple-700'
-                      }`}
+                      className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isSending ? 'Sending...' : 'Send'}
                     </button>
@@ -738,106 +904,111 @@ function MainWindow() {
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">Settings</h2>
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-2xl mx-auto">
+              <h2 className="text-2xl font-bold text-white mb-8">Settings</h2>
 
-            {/* Keyboard Shortcut */}
-            <div className="mb-8">
-              <h3 className="text-lg font-medium text-gray-800 mb-3">Capture Shortcut</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Press a key combination to set the shortcut for screen capture.
-              </p>
+              {/* Keyboard Shortcut */}
+              <div className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-6 mb-6">
+                <h3 className="text-lg font-medium text-white mb-2">Capture Shortcut</h3>
+                <p className="text-sm text-gray-500 mb-4">
+                  Press a key combination to set the shortcut for screen capture.
+                </p>
 
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    value={shortcutInput}
-                    onKeyDown={handleShortcutKeyDown}
-                    onFocus={() => setIsRecordingShortcut(true)}
-                    onBlur={() => !shortcutInput && resetShortcut()}
-                    readOnly
-                    placeholder="Click and press keys..."
-                    className={`w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 ${
-                      isRecordingShortcut
-                        ? 'border-blue-500 focus:ring-blue-500 bg-blue-50'
-                        : 'border-gray-300 focus:ring-gray-500'
-                    }`}
-                  />
-                  {shortcutError && (
-                    <p className="text-sm text-red-600 mt-1">{shortcutError}</p>
+                <div className="flex items-center gap-4">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={shortcutInput}
+                      onKeyDown={handleShortcutKeyDown}
+                      onFocus={() => setIsRecordingShortcut(true)}
+                      onBlur={() => !shortcutInput && resetShortcut()}
+                      readOnly
+                      placeholder="Click and press keys..."
+                      className={`w-full px-4 py-3 rounded-xl focus:outline-none transition-colors ${
+                        isRecordingShortcut
+                          ? 'bg-indigo-500/10 border-2 border-indigo-500 text-white'
+                          : 'bg-[#0f0f0f] border border-gray-800 text-gray-300'
+                      }`}
+                    />
+                    {shortcutError && (
+                      <p className="text-sm text-red-400 mt-2">{shortcutError}</p>
+                    )}
+                  </div>
+
+                  {shortcutInput !== settings.captureShortcut && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveShortcut}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={resetShortcut}
+                        className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   )}
                 </div>
 
-                {shortcutInput !== settings.captureShortcut && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={saveShortcut}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={resetShortcut}
-                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                )}
+                <p className="text-xs text-gray-600 mt-3">
+                  Current shortcut:{' '}
+                  <kbd className="px-2 py-1 bg-gray-800 rounded text-gray-400 font-mono">
+                    {shortcutKeys.join(' + ')}
+                  </kbd>
+                </p>
               </div>
 
-              <p className="text-xs text-gray-500 mt-2">
-                Current shortcut: <kbd className="px-2 py-1 bg-gray-100 rounded">{settings.captureShortcut.replace('CommandOrControl', 'Ctrl')}</kbd>
-              </p>
-            </div>
+              {/* Data Management */}
+              <div className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-6 mb-6">
+                <h3 className="text-lg font-medium text-white mb-2">Data Management</h3>
+                <p className="text-sm text-gray-500 mb-4">
+                  Manage your captured data and chat history.
+                </p>
 
-            {/* Data Management */}
-            <div className="mb-8">
-              <h3 className="text-lg font-medium text-gray-800 mb-3">Data Management</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Manage your captured data and chat history.
-              </p>
-
-              <div className="flex gap-4">
-                <button
-                  onClick={clearAllCaptures}
-                  disabled={ocrResults.length === 0}
-                  className={`px-4 py-2 rounded-md font-medium ${
-                    ocrResults.length === 0
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : 'bg-red-100 text-red-700 hover:bg-red-200'
-                  }`}
-                >
-                  Clear All Captures ({ocrResults.length})
-                </button>
-                <button
-                  onClick={clearAllChats}
-                  disabled={chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0}
-                  className={`px-4 py-2 rounded-md font-medium ${
-                    chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : 'bg-red-100 text-red-700 hover:bg-red-200'
-                  }`}
-                >
-                  Clear All Chats ({chatTabs.length} tabs)
-                </button>
+                <div className="flex gap-4">
+                  <button
+                    onClick={clearAllCaptures}
+                    disabled={ocrResults.length === 0}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      ocrResults.length === 0
+                        ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                        : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                    }`}
+                  >
+                    Clear Captures ({ocrResults.length})
+                  </button>
+                  <button
+                    onClick={clearAllChats}
+                    disabled={chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0
+                        ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                        : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                    }`}
+                  >
+                    Clear Chats ({chatTabs.length} tabs)
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* About */}
-            <div>
-              <h3 className="text-lg font-medium text-gray-800 mb-3">About</h3>
-              <p className="text-sm text-gray-600">
-                SnipSolve - Overlay RAG Tool for instant documentation search
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                Data stored in: ~/.snipsolve/
-              </p>
+              {/* About */}
+              <div className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-6">
+                <h3 className="text-lg font-medium text-white mb-2">About</h3>
+                <p className="text-sm text-gray-400">
+                  SnipSolve - Overlay RAG Tool for instant documentation search
+                </p>
+                <p className="text-xs text-gray-600 mt-2">
+                  Data stored in: ~/.snipsolve/
+                </p>
+              </div>
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   )
 }

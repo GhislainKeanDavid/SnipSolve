@@ -8,7 +8,17 @@ function App() {
   useEffect(() => {
     // Check if we're in overlay mode based on URL hash
     const checkMode = () => {
-      setIsOverlay(window.location.hash === '#overlay')
+      const overlayMode = window.location.hash === '#overlay'
+      setIsOverlay(overlayMode)
+
+      // Add/remove overlay-mode class on html element for CSS targeting
+      if (overlayMode) {
+        document.documentElement.classList.add('overlay-mode')
+        document.body.classList.add('overlay-mode')
+      } else {
+        document.documentElement.classList.remove('overlay-mode')
+        document.body.classList.remove('overlay-mode')
+      }
     }
 
     checkMode()

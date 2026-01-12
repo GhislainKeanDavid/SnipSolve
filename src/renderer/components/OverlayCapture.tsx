@@ -21,6 +21,14 @@ function OverlayCapture() {
     console.log('OverlayCapture component mounted!')
     console.log('Window hash:', window.location.hash)
 
+    // Ensure transparent backgrounds for overlay mode
+    document.documentElement.style.backgroundColor = 'transparent'
+    document.body.style.backgroundColor = 'transparent'
+    const root = document.getElementById('root')
+    if (root) {
+      root.style.backgroundColor = 'transparent'
+    }
+
     // Handle escape key to close overlay
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
