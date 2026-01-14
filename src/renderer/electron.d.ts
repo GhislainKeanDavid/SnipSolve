@@ -48,21 +48,28 @@ export interface ChatFollowupRequest {
     relevantDocs: RelevantDoc[]
   }
   chatHistory: ChatMessage[]
+  isNewChat?: boolean
+  generateTitle?: boolean
 }
 
 export interface ChatFollowupResult {
   success: boolean
   reply?: string
   error?: string
+  generatedTitle?: string
 }
 
-export interface ChatTab {
+export interface Conversation {
   id: string
-  type: 'general' | 'capture'
+  type: 'chat' | 'capture'
   captureTimestamp?: string
   title: string
   chatHistory: ChatMessage[]
+  createdAt: string
 }
+
+// Legacy alias for backwards compatibility with saved data
+export type ChatTab = Conversation
 
 export interface AppSettings {
   captureShortcut: string
@@ -88,8 +95,8 @@ export interface ElectronAPI {
   // Persistence
   loadCaptures: () => Promise<OCRResult[]>
   saveCaptures: (captures: OCRResult[]) => Promise<{ success: boolean }>
-  loadChats: () => Promise<ChatTab[]>
-  saveChats: (chats: ChatTab[]) => Promise<{ success: boolean }>
+  loadChats: () => Promise<Conversation[]>
+  saveChats: (chats: Conversation[]) => Promise<{ success: boolean }>
   // Settings
   getSettings: () => Promise<AppSettings>
   setCaptureShortcut: (shortcut: string) => Promise<SetShortcutResult>

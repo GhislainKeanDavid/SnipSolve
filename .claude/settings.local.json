@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(npm run dev)",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Skill(skill-writer)",
+      "Bash(npm test)",
+      "Bash(git add:*)"
     ]
   }
 }

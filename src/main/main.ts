@@ -227,15 +227,16 @@ async function generateSolution(
       }
     }
 
-    const systemPrompt = `You are SnipSolve, a helpful assistant that provides solutions to technical problems based on captured screen content and company documentation.
+    const systemPrompt = `You are SnipSolve, a documentation assistant that helps users solve problems using their uploaded knowledge base.
 
-Your role is to:
-1. Analyze the captured text (which may be an error message, warning, or other technical content)
-2. Use the provided documentation context if relevant
-3. Provide a clear, concise solution or explanation
-4. If the documentation doesn't contain relevant information, provide general best practices
-
-Keep responses concise but helpful. Use bullet points for steps when appropriate.`
+RULES:
+1. If documentation is provided, answer based on it and cite the source document
+2. If no relevant documentation is found, briefly say so and suggest:
+   - Upload relevant documentation for this topic
+   - Try different search terms
+   - Check what documents are currently available
+3. Keep responses concise (2-4 sentences when possible)
+4. Use bullet points for multi-step solutions`
 
     const userPrompt = `Captured Screen Content:
 ${capturedText}
@@ -251,7 +252,7 @@ Please analyze this and provide a solution or explanation.`
         { role: 'user', content: userPrompt }
       ],
       max_tokens: 500,
-      temperature: 0.7
+      temperature: 0.2 // Low temperature for factual, documentation-based responses
     })
 
     const solution = response.choices[0]?.message?.content || 'No solution generated.'
@@ -576,6 +577,30 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
   }
 })
 
+// Generate a short title for a conversation using AI
+async function generateChatTitle(message: string): Promise<string> {
+  if (!openai) return message.slice(0, 30) + (message.length > 30 ? '...' : '')
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Generate a very short title (3-5 words max) that summarizes the user\'s question. No quotes, no punctuation at the end. Just the title.'
+        },
+        { role: 'user', content: message }
+      ],
+      max_tokens: 20,
+      temperature: 0.3
+    })
+    return response.choices[0]?.message?.content?.trim() || message.slice(0, 30)
+  } catch (error) {
+    console.error('Title generation error:', error)
+    return message.slice(0, 30) + (message.length > 30 ? '...' : '')
+  }
+}
+
 // Chat follow-up handler
 ipcMain.handle('chat-followup', async (event, data: {
   message: string,
@@ -584,10 +609,12 @@ ipcMain.handle('chat-followup', async (event, data: {
     aiSolution: string,
     relevantDocs: Array<{ docName: string; text: string; score: number }>
   },
-  chatHistory: Array<{ role: 'user' | 'assistant', content: string }>
+  chatHistory: Array<{ role: 'user' | 'assistant', content: string }>,
+  isNewChat?: boolean,
+  generateTitle?: boolean
 }) => {
   try {
-    console.log('Processing follow-up chat message...')
+    console.log('Processing chat message...')
 
     if (!openai) {
       return {
@@ -596,21 +623,61 @@ ipcMain.handle('chat-followup', async (event, data: {
       }
     }
 
-    // Build the system prompt with capture context
-    const systemPrompt = `You are SnipSolve, a helpful assistant that provides solutions to technical problems.
+    // Generate title if this is the first message
+    let generatedTitle: string | undefined
+    if (data.generateTitle) {
+      generatedTitle = await generateChatTitle(data.message)
+      console.log('Generated title:', generatedTitle)
+    }
 
-The user previously captured this from their screen:
-"${data.captureContext.text}"
+    // For new chats (not capture follow-ups), search the KB for relevant docs
+    let relevantDocs = data.captureContext.relevantDocs
+    if (data.isNewChat || (data.captureContext.text === '' && relevantDocs.length === 0)) {
+      console.log('Searching KB for new chat message...')
+      relevantDocs = searchDocuments(data.message, 3)
+    }
 
-Your initial solution was:
-"${data.captureContext.aiSolution}"
+    // Build system prompt based on chat type
+    const isCaptureChat = data.captureContext.text !== ''
 
-${data.captureContext.relevantDocs.length > 0 ? `
-Relevant documentation that was found:
-${data.captureContext.relevantDocs.map(doc => `[From ${doc.docName}]: ${doc.text}`).join('\n\n')}
+    let systemPrompt: string
+
+    if (isCaptureChat) {
+      // Capture follow-up: include capture context
+      systemPrompt = `You are SnipSolve, a documentation assistant. Answer based on the provided documentation when available.
+
+CONTEXT FROM CAPTURE:
+Screen content: "${data.captureContext.text}"
+Previous response: "${data.captureContext.aiSolution}"
+
+${relevantDocs.length > 0 ? `
+DOCUMENTATION:
+${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
 ` : ''}
 
-The user is now asking a follow-up question. Help them with their question, referencing the original capture and documentation when relevant. Keep responses concise but helpful.`
+RULES:
+- If documentation contains the answer, cite the source document
+- If no relevant documentation exists, briefly say so and suggest: uploading relevant docs, rephrasing the question, or checking if the topic is covered in other documents
+- Keep responses concise`
+    } else {
+      // New chat: search KB and respond
+      systemPrompt = `You are SnipSolve, a documentation assistant. Answer based on the user's uploaded knowledge base.
+
+${relevantDocs.length > 0 ? `
+DOCUMENTATION FOUND:
+${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
+
+RULES:
+- Answer using the documentation above and cite the source
+- Keep responses concise and factual
+` : `
+NO MATCHING DOCUMENTATION FOUND.
+
+RULES:
+- Briefly inform the user no relevant docs were found for their query
+- Suggest they: upload relevant documentation, try different keywords, or check what documents are available
+- Keep response to 1-2 sentences`}`
+    }
 
     // Build messages array with chat history
     const messages: Array<{ role: 'system' | 'user' | 'assistant', content: string }> = [
@@ -624,7 +691,7 @@ The user is now asking a follow-up question. Help them with their question, refe
       model: 'gpt-4o-mini',
       messages: messages,
       max_tokens: 500,
-      temperature: 0.7
+      temperature: 0.2 // Low temperature for factual, documentation-based responses
     })
 
     const reply = response.choices[0]?.message?.content || 'No response generated.'
@@ -632,7 +699,8 @@ The user is now asking a follow-up question. Help them with their question, refe
 
     return {
       success: true,
-      reply: reply
+      reply: reply,
+      generatedTitle: generatedTitle
     }
   } catch (error) {
     console.error('Chat follow-up error:', error)

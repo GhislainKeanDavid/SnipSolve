@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import type { OCRResult, ChatMessage, ChatTab, AppSettings } from '../electron'
+import type { OCRResult, ChatMessage, Conversation, AppSettings } from '../electron'
 import {
   FileText,
   MessageSquare,
@@ -13,7 +13,9 @@ import {
   Search,
   Trash2,
   Copy,
-  X
+  X,
+  Camera,
+  MoreVertical
 } from 'lucide-react'
 
 interface Document {
@@ -33,11 +35,9 @@ function MainWindow() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
 
-  // Chat tabs state
-  const [chatTabs, setChatTabs] = useState<ChatTab[]>([
-    { id: 'general', type: 'general', title: 'General', chatHistory: [] }
-  ])
-  const [activeChatTabId, setActiveChatTabId] = useState<string>('general')
+  // Conversations state (Claude/ChatGPT style)
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isLoaded, setIsLoaded] = useState(false)
@@ -66,11 +66,23 @@ function MainWindow() {
           console.log(`✅ Loaded ${savedCaptures.length} captures`)
         }
 
-        // Load chat tabs
+        // Load conversations
         const savedChats = await window.electronAPI.loadChats()
         if (savedChats.length > 0) {
-          setChatTabs(savedChats)
-          console.log(`✅ Loaded ${savedChats.length} chat tabs`)
+          // Migrate old format: filter out 'general' type and ensure createdAt exists
+          const migratedChats = savedChats
+            .filter((c: any) => c.type !== 'general')
+            .map((c: any) => ({
+              ...c,
+              type: c.type === 'general' ? 'chat' : c.type,
+              createdAt: c.createdAt || new Date().toISOString()
+            }))
+          setConversations(migratedChats)
+          // Set active to most recent if exists
+          if (migratedChats.length > 0) {
+            setActiveConversationId(migratedChats[0].id)
+          }
+          console.log(`✅ Loaded ${migratedChats.length} conversations`)
         }
 
         // Load settings
@@ -110,13 +122,13 @@ function MainWindow() {
     }
   }, [ocrResults, isLoaded])
 
-  // Save chats when they change (after initial load)
+  // Save conversations when they change (after initial load)
   useEffect(() => {
     if (isLoaded && chatsModified.current) {
-      window.electronAPI.saveChats(chatTabs)
+      window.electronAPI.saveChats(conversations)
       chatsModified.current = false
     }
-  }, [chatTabs, isLoaded])
+  }, [conversations, isLoaded])
 
   const loadDocuments = async () => {
     try {
@@ -150,12 +162,28 @@ function MainWindow() {
     }
   }
 
-  const openCaptureChat = (captureTimestamp: string, captureNumber: number) => {
-    const tabId = `capture-${captureTimestamp}`
-    const existingTab = chatTabs.find(t => t.id === tabId)
+  // Create a new chat conversation
+  const createNewChat = () => {
+    const newConversation: Conversation = {
+      id: `chat-${Date.now()}`,
+      type: 'chat',
+      title: 'New Chat',
+      chatHistory: [],
+      createdAt: new Date().toISOString()
+    }
+    chatsModified.current = true
+    setConversations(prev => [newConversation, ...prev])
+    setActiveConversationId(newConversation.id)
+    setActiveTab('chat')
+  }
 
-    if (existingTab) {
-      setActiveChatTabId(tabId)
+  // Open or create a conversation for a capture
+  const openCaptureChat = (captureTimestamp: string, captureNumber: number) => {
+    const conversationId = `capture-${captureTimestamp}`
+    const existingConversation = conversations.find(c => c.id === conversationId)
+
+    if (existingConversation) {
+      setActiveConversationId(conversationId)
     } else {
       const capture = ocrResults.find(r => r.timestamp === captureTimestamp)
       const initialHistory: ChatMessage[] = []
@@ -167,28 +195,30 @@ function MainWindow() {
         })
       }
 
-      const newTab: ChatTab = {
-        id: tabId,
+      const newConversation: Conversation = {
+        id: conversationId,
         type: 'capture',
         captureTimestamp,
         title: `Capture #${captureNumber}`,
-        chatHistory: initialHistory
+        chatHistory: initialHistory,
+        createdAt: new Date().toISOString()
       }
       chatsModified.current = true
-      setChatTabs(prev => [...prev, newTab])
-      setActiveChatTabId(tabId)
+      setConversations(prev => [newConversation, ...prev])
+      setActiveConversationId(conversationId)
     }
     setActiveTab('chat')
   }
 
-  const closeChatTab = (tabId: string) => {
-    if (tabId === 'general') return
-
+  // Delete a conversation
+  const deleteConversation = (conversationId: string) => {
     chatsModified.current = true
-    setChatTabs(prev => prev.filter(t => t.id !== tabId))
+    setConversations(prev => prev.filter(c => c.id !== conversationId))
 
-    if (activeChatTabId === tabId) {
-      setActiveChatTabId('general')
+    if (activeConversationId === conversationId) {
+      // Select the next conversation or null
+      const remaining = conversations.filter(c => c.id !== conversationId)
+      setActiveConversationId(remaining.length > 0 ? remaining[0].id : null)
     }
   }
 
@@ -196,23 +226,28 @@ function MainWindow() {
     if (!chatInput.trim()) return
 
     const message = chatInput.trim()
-    const currentChatTab = chatTabs.find(t => t.id === activeChatTabId)
-    if (!currentChatTab) return
+    const currentConversation = conversations.find(c => c.id === activeConversationId)
+    if (!currentConversation) return
 
     setIsSending(true)
 
-    const updatedHistory: ChatMessage[] = [...currentChatTab.chatHistory, { role: 'user', content: message }]
+    const updatedHistory: ChatMessage[] = [...currentConversation.chatHistory, { role: 'user', content: message }]
+
+    // Check if we need to generate a title (first user message in a "New Chat")
+    const isFirstUserMessage = currentConversation.chatHistory.filter(m => m.role === 'user').length === 0
+    const shouldGenerateTitle = isFirstUserMessage && currentConversation.title === 'New Chat'
+
     chatsModified.current = true
-    setChatTabs(prev => prev.map(t =>
-      t.id === activeChatTabId ? { ...t, chatHistory: updatedHistory } : t
+    setConversations(prev => prev.map(c =>
+      c.id === activeConversationId ? { ...c, chatHistory: updatedHistory } : c
     ))
     setChatInput('')
 
     try {
       let captureContext: { text: string, aiSolution: string, relevantDocs: any[] }
 
-      if (currentChatTab.type === 'capture' && currentChatTab.captureTimestamp) {
-        const capture = ocrResults.find(r => r.timestamp === currentChatTab.captureTimestamp)
+      if (currentConversation.type === 'capture' && currentConversation.captureTimestamp) {
+        const capture = ocrResults.find(r => r.timestamp === currentConversation.captureTimestamp)
         if (capture) {
           captureContext = {
             text: capture.text,
@@ -229,40 +264,46 @@ function MainWindow() {
       const response = await window.electronAPI.chatFollowup({
         message,
         captureContext,
-        chatHistory: currentChatTab.chatHistory
+        chatHistory: currentConversation.chatHistory,
+        isNewChat: currentConversation.type === 'chat',
+        generateTitle: shouldGenerateTitle
       })
 
       if (response.success && response.reply) {
         chatsModified.current = true
-        setChatTabs(prev => prev.map(t =>
-          t.id === activeChatTabId
-            ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: response.reply! }] }
-            : t
+        setConversations(prev => prev.map(c =>
+          c.id === activeConversationId
+            ? {
+                ...c,
+                chatHistory: [...updatedHistory, { role: 'assistant', content: response.reply! }],
+                title: response.generatedTitle || c.title
+              }
+            : c
         ))
       } else {
         chatsModified.current = true
-        setChatTabs(prev => prev.map(t =>
-          t.id === activeChatTabId
-            ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: `Error: ${response.error || 'Failed to get response'}` }] }
-            : t
+        setConversations(prev => prev.map(c =>
+          c.id === activeConversationId
+            ? { ...c, chatHistory: [...updatedHistory, { role: 'assistant', content: `Error: ${response.error || 'Failed to get response'}` }] }
+            : c
         ))
       }
     } catch (error) {
       console.error('Chat error:', error)
       chatsModified.current = true
-      setChatTabs(prev => prev.map(t =>
-        t.id === activeChatTabId
-          ? { ...t, chatHistory: [...updatedHistory, { role: 'assistant', content: 'Error: Failed to send message' }] }
-          : t
+      setConversations(prev => prev.map(c =>
+        c.id === activeConversationId
+          ? { ...c, chatHistory: [...updatedHistory, { role: 'assistant', content: 'Error: Failed to send message' }] }
+          : c
       ))
     } finally {
       setIsSending(false)
     }
   }
 
-  const activeChatTab = chatTabs.find(t => t.id === activeChatTabId)
-  const activeCaptureForChat = activeChatTab?.type === 'capture' && activeChatTab.captureTimestamp
-    ? ocrResults.find(r => r.timestamp === activeChatTab.captureTimestamp)
+  const activeConversation = conversations.find(c => c.id === activeConversationId)
+  const activeCaptureForChat = activeConversation?.type === 'capture' && activeConversation.captureTimestamp
+    ? ocrResults.find(r => r.timestamp === activeConversation.captureTimestamp)
     : null
 
   // Handle keyboard shortcut recording
@@ -311,11 +352,11 @@ function MainWindow() {
   }
 
   const clearAllChats = () => {
-    if (confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+    if (confirm('Are you sure you want to clear all conversations? This cannot be undone.')) {
       chatsModified.current = true
-      setChatTabs([{ id: 'general', type: 'general', title: 'General', chatHistory: [] }])
-      setActiveChatTabId('general')
-      window.electronAPI.saveChats([{ id: 'general', type: 'general', title: 'General', chatHistory: [] }])
+      setConversations([])
+      setActiveConversationId(null)
+      window.electronAPI.saveChats([])
     }
   }
 
@@ -516,7 +557,7 @@ function MainWindow() {
               {/* Secondary Action: AI Chat Assistant */}
               <div className="md:col-span-2">
                 <div
-                  onClick={() => setActiveTab('chat')}
+                  onClick={createNewChat}
                   className="group relative bg-[#1a1a1a] border border-gray-800 rounded-xl p-8 cursor-pointer transition-all duration-300 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/10"
                 >
                   <div className="flex items-center justify-between">
@@ -773,44 +814,83 @@ function MainWindow() {
 
         {/* Chat Tab */}
         {activeTab === 'chat' && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Chat Tabs */}
-            <div className="flex items-center border-b border-gray-800 bg-[#0f0f0f] px-2 pt-2">
-              {chatTabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-t-lg cursor-pointer border-t border-l border-r transition-colors ${
-                    activeChatTabId === tab.id
-                      ? 'bg-[#1a1a1a] border-gray-800 -mb-px text-white'
-                      : 'bg-transparent border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
-                  }`}
-                  onClick={() => setActiveChatTabId(tab.id)}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Conversation Sidebar */}
+            <div className="w-64 bg-[#0f0f0f] border-r border-gray-800 flex flex-col">
+              {/* New Chat Button */}
+              <div className="p-3 border-b border-gray-800">
+                <button
+                  onClick={createNewChat}
+                  className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center justify-center gap-2 font-medium"
                 >
-                  <span className="text-sm font-medium truncate max-w-[120px]">
-                    {tab.type === 'general' ? 'General' : tab.title}
-                  </span>
-                  {tab.type !== 'general' && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        closeChatTab(tab.id)
-                      }}
-                      className="text-gray-500 hover:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center hover:bg-gray-700"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                  <Plus className="w-4 h-4" />
+                  New Chat
+                </button>
+              </div>
+
+              {/* Conversation List */}
+              <div className="flex-1 overflow-y-auto">
+                {conversations.length === 0 ? (
+                  <div className="p-4 text-center text-gray-500 text-sm">
+                    No conversations yet
+                  </div>
+                ) : (
+                  <div className="py-2">
+                    {conversations.map((conv) => (
+                      <div
+                        key={conv.id}
+                        className={`group flex items-center gap-3 px-3 py-3 mx-2 rounded-lg cursor-pointer transition-colors ${
+                          activeConversationId === conv.id
+                            ? 'bg-gray-800 text-white'
+                            : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
+                        }`}
+                        onClick={() => setActiveConversationId(conv.id)}
+                      >
+                        {/* Icon */}
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          conv.type === 'capture'
+                            ? 'bg-amber-500/20 text-amber-400'
+                            : 'bg-indigo-500/20 text-indigo-400'
+                        }`}>
+                          {conv.type === 'capture' ? (
+                            <Camera className="w-4 h-4" />
+                          ) : (
+                            <MessageSquare className="w-4 h-4" />
+                          )}
+                        </div>
+
+                        {/* Title & Info */}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{conv.title}</p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {new Date(conv.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+
+                        {/* Delete Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            deleteConversation(conv.id)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Chat Content */}
-            <div className="flex-1 flex flex-col overflow-hidden p-6">
-              {activeChatTab ? (
-                <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+              {activeConversation ? (
+                <div className="flex-1 flex flex-col p-6 min-h-0">
                   {/* Chat Header */}
-                  {activeChatTab.type === 'capture' && activeCaptureForChat && (
-                    <div className="mb-4 pb-4 border-b border-gray-800">
+                  {activeConversation.type === 'capture' && activeCaptureForChat && (
+                    <div className="mb-4 pb-4 border-b border-gray-800 flex-shrink-0">
                       <div className="flex items-start gap-4">
                         {activeCaptureForChat.image && (
                           <img
@@ -821,19 +901,30 @@ function MainWindow() {
                         )}
                         <div>
                           <h3 className="text-sm font-semibold text-white mb-1">
-                            {activeChatTab.title} - Follow-up Chat
+                            {activeConversation.title}
                           </h3>
                           <p className="text-xs text-gray-500">
-                            {new Date(activeCaptureForChat.timestamp).toLocaleString()}
+                            Capture from {new Date(activeCaptureForChat.timestamp).toLocaleString()}
                           </p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {activeChatTab.type === 'general' && (
-                    <div className="mb-4 pb-4 border-b border-gray-800">
-                      <h3 className="text-sm font-semibold text-white mb-1">General Chat</h3>
+                  {activeConversation.type === 'capture' && !activeCaptureForChat && (
+                    <div className="mb-4 pb-4 border-b border-gray-800 flex-shrink-0">
+                      <h3 className="text-sm font-semibold text-white mb-1">
+                        {activeConversation.title}
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        Capture conversation
+                      </p>
+                    </div>
+                  )}
+
+                  {activeConversation.type === 'chat' && (
+                    <div className="mb-4 pb-4 border-b border-gray-800 flex-shrink-0">
+                      <h3 className="text-sm font-semibold text-white mb-1">{activeConversation.title}</h3>
                       <p className="text-xs text-gray-500">
                         Ask questions about your uploaded documentation
                       </p>
@@ -841,16 +932,16 @@ function MainWindow() {
                   )}
 
                   {/* Chat Messages */}
-                  <div className="flex-1 overflow-y-auto mb-4 space-y-4">
-                    {activeChatTab.chatHistory.length === 0 && activeChatTab.type === 'general' && (
+                  <div className="flex-1 overflow-y-auto mb-4 space-y-4 min-h-0">
+                    {activeConversation.chatHistory.length === 0 && (
                       <div className="text-center py-16">
                         <div className="w-16 h-16 mx-auto mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
                           <MessageSquare className="w-8 h-8 text-gray-600" />
                         </div>
-                        <p className="text-gray-500">Ask any question about your documentation...</p>
+                        <p className="text-gray-500">Start a conversation...</p>
                       </div>
                     )}
-                    {activeChatTab.chatHistory.map((msg, msgIndex) => (
+                    {activeConversation.chatHistory.map((msg, msgIndex) => (
                       <div
                         key={msgIndex}
                         className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -869,7 +960,7 @@ function MainWindow() {
                   </div>
 
                   {/* Chat Input */}
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 flex-shrink-0">
                     <input
                       type="text"
                       value={chatInput}
@@ -880,9 +971,9 @@ function MainWindow() {
                           handleSendMessage()
                         }
                       }}
-                      placeholder={activeChatTab.type === 'general'
-                        ? "Ask about your documentation..."
-                        : "Ask a follow-up question..."}
+                      placeholder={activeConversation.type === 'capture'
+                        ? "Ask a follow-up question..."
+                        : "Ask about your documentation..."}
                       disabled={isSending}
                       className="flex-1 px-4 py-3 bg-[#1a1a1a] border border-gray-800 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50 transition-colors"
                     />
@@ -896,7 +987,19 @@ function MainWindow() {
                   </div>
                 </div>
               ) : (
-                <p className="text-gray-500 text-center py-8">No chat tab selected</p>
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
+                  <div className="w-16 h-16 mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
+                    <MessageSquare className="w-8 h-8 text-gray-600" />
+                  </div>
+                  <p className="mb-4">No conversation selected</p>
+                  <button
+                    onClick={createNewChat}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Start a new chat
+                  </button>
+                </div>
               )}
             </div>
           </div>
