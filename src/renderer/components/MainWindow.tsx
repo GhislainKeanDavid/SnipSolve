@@ -15,7 +15,9 @@ import {
   Copy,
   X,
   Camera,
-  MoreVertical
+  Eye,
+  Home,
+  Download
 } from 'lucide-react'
 
 interface Document {
@@ -51,9 +53,17 @@ function MainWindow() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
 
+  // Document preview state
+  const [previewingDoc, setPreviewingDoc] = useState<{ doc: Document; content: string } | null>(null)
+  const [highlightedDocId, setHighlightedDocId] = useState<string | null>(null)
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false)
+
   // Track if data has been modified (to avoid saving on initial load)
   const capturesModified = useRef(false)
   const chatsModified = useRef(false)
+
+  // Ref for auto-scrolling chat messages
+  const chatMessagesRef = useRef<HTMLDivElement>(null)
 
   // Load persisted data on startup
   useEffect(() => {
@@ -159,6 +169,17 @@ function MainWindow() {
       await loadDocuments()
     } catch (error) {
       console.error('Failed to delete document:', error)
+    }
+  }
+
+  const handleDownloadDocument = async (doc: Document) => {
+    try {
+      const result = await window.electronAPI.downloadDocument(doc.id)
+      if (!result.success) {
+        console.error('Failed to download document:', result.error)
+      }
+    } catch (error) {
+      console.error('Failed to download document:', error)
     }
   }
 
@@ -306,6 +327,16 @@ function MainWindow() {
     ? ocrResults.find(r => r.timestamp === activeConversation.captureTimestamp)
     : null
 
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    if (chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTo({
+        top: chatMessagesRef.current.scrollHeight,
+        behavior: 'smooth'
+      })
+    }
+  }, [activeConversation?.chatHistory, isSending])
+
   // Handle keyboard shortcut recording
   const handleShortcutKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault()
@@ -369,6 +400,99 @@ function MainWindow() {
     navigator.clipboard.writeText(text)
   }
 
+  // Open document preview modal
+  const openDocumentPreview = async (doc: Document) => {
+    setIsLoadingPreview(true)
+    try {
+      const result = await window.electronAPI.getDocumentContent(doc.id)
+      if (result.success && result.content) {
+        setPreviewingDoc({ doc, content: result.content })
+      } else {
+        console.error('Failed to load document content:', result.error)
+      }
+    } catch (error) {
+      console.error('Error loading document:', error)
+    } finally {
+      setIsLoadingPreview(false)
+    }
+  }
+
+  // Navigate to documents tab and highlight a specific document
+  const navigateToDocument = (docName: string) => {
+    // Find document by name
+    const doc = documents.find(d => d.name === docName)
+    if (doc) {
+      setHighlightedDocId(doc.id)
+      setActiveTab('documents')
+      // Clear highlight after 3 seconds
+      setTimeout(() => setHighlightedDocId(null), 3000)
+    } else {
+      // Document not found, just navigate to tab
+      setActiveTab('documents')
+    }
+  }
+
+  // Render message content with clickable source links
+  const renderMessageWithSources = (content: string) => {
+    // Match patterns like:
+    // [Source: docname.pdf], [From docname.pdf], [docname.pdf]:, [docname.pdf]
+    const sourcePattern = /\[(?:Source:\s*|From\s+)?([^\]]+\.(?:pdf|txt|md))\](?::)?/gi
+    const parts: Array<{ type: 'text' | 'source'; content: string }> = []
+    let lastIndex = 0
+    let match
+    const sources: string[] = []
+
+    while ((match = sourcePattern.exec(content)) !== null) {
+      // Add text before the match
+      if (match.index > lastIndex) {
+        parts.push({ type: 'text', content: content.slice(lastIndex, match.index) })
+      }
+      // Collect source for display at end
+      sources.push(match[1])
+      lastIndex = match.index + match[0].length
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      parts.push({ type: 'text', content: content.slice(lastIndex) })
+    }
+
+    // If no sources found, return plain text
+    if (sources.length === 0) {
+      return <span className="whitespace-pre-wrap">{content}</span>
+    }
+
+    // Get unique sources
+    const uniqueSources = [...new Set(sources)]
+
+    return (
+      <div>
+        <span className="whitespace-pre-wrap">
+          {parts.map((part, idx) => (
+            <span key={idx}>{part.content}</span>
+          ))}
+        </span>
+        {/* Sources section with spacing */}
+        <div className="mt-3 pt-3 border-t border-gray-700/50">
+          <p className="text-xs text-gray-500 mb-2">Sources:</p>
+          <div className="flex flex-wrap gap-2">
+            {uniqueSources.map((source, idx) => (
+              <button
+                key={idx}
+                onClick={() => navigateToDocument(source)}
+                className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 hover:text-indigo-200 rounded text-xs font-medium transition-colors"
+                title="View in Knowledge Base"
+              >
+                <FileText className="w-3 h-3" />
+                {source}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Filtered captures based on search
   const filteredCaptures = searchQuery
     ? ocrResults.filter(r =>
@@ -406,7 +530,18 @@ function MainWindow() {
             }`}
             title="Home"
           >
-            <Command className="w-5 h-5" />
+            <Home className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'chat'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Chat"
+          >
+            <MessageSquare className="w-5 h-5" />
           </button>
           <button
             onClick={() => setActiveTab('captures')}
@@ -429,17 +564,6 @@ function MainWindow() {
             title="Documents"
           >
             <FileText className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => setActiveTab('chat')}
-            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
-              activeTab === 'chat'
-                ? 'bg-indigo-600 text-white'
-                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-            title="Chat"
-          >
-            <MessageSquare className="w-5 h-5" />
           </button>
         </nav>
 
@@ -551,6 +675,15 @@ function MainWindow() {
                   {/* Decorative elements */}
                   <div className="absolute -top-20 -right-20 w-40 h-40 bg-white/5 rounded-full blur-3xl" />
                   <div className="absolute -bottom-20 -left-20 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl" />
+                </div>
+              </div>
+
+              {/* Or Separator */}
+              <div className="md:col-span-2 flex items-center justify-center">
+                <div className="flex items-center w-full max-w-md">
+                  <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-700 to-gray-700"></div>
+                  <span className="px-4 text-sm text-gray-500 uppercase tracking-wider">Or</span>
+                  <div className="flex-1 h-px bg-gradient-to-l from-transparent via-gray-700 to-gray-700"></div>
                 </div>
               </div>
 
@@ -698,7 +831,14 @@ function MainWindow() {
                               {result.relevantDocs.map((doc, docIndex) => (
                                 <div key={docIndex} className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
                                   <div className="flex justify-between items-start mb-1">
-                                    <p className="text-xs font-medium text-blue-300">{doc.docName}</p>
+                                    <button
+                                      onClick={() => navigateToDocument(doc.docName)}
+                                      className="text-xs font-medium text-blue-300 hover:text-blue-200 hover:underline transition-colors flex items-center gap-1"
+                                      title="View in Knowledge Base"
+                                    >
+                                      <FileText className="w-3 h-3" />
+                                      {doc.docName}
+                                    </button>
                                     <span className="text-xs text-blue-400">Score: {doc.score}</span>
                                   </div>
                                   <p className="text-xs text-gray-400 whitespace-pre-wrap">{doc.text}</p>
@@ -786,28 +926,126 @@ function MainWindow() {
               ) : (
                 <div className="space-y-3">
                   {documents.map((doc) => (
-                    <div key={doc.id} className="bg-[#1a1a1a] border border-gray-800 rounded-xl p-4 flex items-center justify-between hover:border-gray-700 transition-colors">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-indigo-500/20 rounded-lg flex items-center justify-center">
+                    <div
+                      key={doc.id}
+                      className={`bg-[#1a1a1a] border rounded-xl p-4 flex items-center justify-between transition-all duration-300 ${
+                        highlightedDocId === doc.id
+                          ? 'border-indigo-500 ring-2 ring-indigo-500/30 bg-indigo-500/10'
+                          : 'border-gray-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          highlightedDocId === doc.id ? 'bg-indigo-500/30' : 'bg-indigo-500/20'
+                        }`}>
                           <FileText className="w-5 h-5 text-indigo-400" />
                         </div>
-                        <div>
-                          <p className="font-medium text-white">{doc.name}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-white truncate">{doc.name}</p>
                           <p className="text-sm text-gray-500">
                             {doc.type.toUpperCase()} • {doc.chunks} chunks • {new Date(doc.uploadedAt).toLocaleDateString()}
                           </p>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleDeleteDocument(doc.id)}
-                        className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openDocumentPreview(doc)}
+                          className="p-2 text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                          title="Preview document"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDownloadDocument(doc)}
+                          className="p-2 text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors"
+                          title="Download document"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteDocument(doc.id)}
+                          className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                          title="Delete document"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Document Preview Modal */}
+        {previewingDoc && (
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-8"
+            onClick={() => setPreviewingDoc(null)}
+          >
+            <div
+              className="bg-[#1a1a1a] border border-gray-700 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-800 flex-shrink-0">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-12 h-12 bg-indigo-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-6 h-6 text-indigo-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xl font-semibold text-white truncate">{previewingDoc.doc.name}</h3>
+                    <p className="text-sm text-gray-500">
+                      {previewingDoc.doc.type.toUpperCase()} • {previewingDoc.doc.chunks} chunks
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPreviewingDoc(null)}
+                  className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="flex-1 overflow-y-auto p-6 min-h-0">
+                <div className="bg-[#0f0f0f] rounded-xl p-6 border border-gray-800 overflow-hidden">
+                  <p
+                    className="whitespace-pre-wrap break-words font-sans text-gray-300 text-sm leading-relaxed"
+                    style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                  >
+                    {previewingDoc.content}
+                  </p>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-between p-4 border-t border-gray-800 flex-shrink-0">
+                <p className="text-sm text-gray-500">
+                  Uploaded {new Date(previewingDoc.doc.uploadedAt).toLocaleDateString()}
+                </p>
+                <button
+                  onClick={() => {
+                    copyToClipboard(previewingDoc.content)
+                  }}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy Content
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Loading Overlay for Document Preview */}
+        {isLoadingPreview && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+            <div className="bg-[#1a1a1a] border border-gray-700 rounded-xl p-6 flex items-center gap-4">
+              <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-gray-300">Loading document...</p>
             </div>
           </div>
         )}
@@ -932,8 +1170,8 @@ function MainWindow() {
                   )}
 
                   {/* Chat Messages */}
-                  <div className="flex-1 overflow-y-auto mb-4 space-y-4 min-h-0">
-                    {activeConversation.chatHistory.length === 0 && (
+                  <div ref={chatMessagesRef} className="flex-1 overflow-y-auto mb-4 space-y-4 min-h-0">
+                    {activeConversation.chatHistory.length === 0 && !isSending && (
                       <div className="text-center py-16">
                         <div className="w-16 h-16 mx-auto mb-4 bg-gray-800 rounded-2xl flex items-center justify-center">
                           <MessageSquare className="w-8 h-8 text-gray-600" />
@@ -953,10 +1191,27 @@ function MainWindow() {
                               : 'bg-[#1a1a1a] border border-gray-800 text-gray-200'
                           }`}
                         >
-                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                          <div className="text-sm">
+                            {msg.role === 'assistant'
+                              ? renderMessageWithSources(msg.content)
+                              : <span className="whitespace-pre-wrap">{msg.content}</span>
+                            }
+                          </div>
                         </div>
                       </div>
                     ))}
+                    {/* Typing indicator */}
+                    {isSending && (
+                      <div className="flex justify-start">
+                        <div className="bg-[#1a1a1a] border border-gray-800 rounded-2xl px-5 py-4">
+                          <div className="flex items-center gap-1">
+                            <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                            <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                            <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Chat Input */}
@@ -1086,14 +1341,14 @@ function MainWindow() {
                   </button>
                   <button
                     onClick={clearAllChats}
-                    disabled={chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0}
+                    disabled={conversations.length === 0}
                     className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      chatTabs.length <= 1 && chatTabs[0]?.chatHistory.length === 0
+                      conversations.length === 0
                         ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                         : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
                     }`}
                   >
-                    Clear Chats ({chatTabs.length} tabs)
+                    Clear Chats ({conversations.length})
                   </button>
                 </div>
               </div>

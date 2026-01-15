@@ -230,13 +230,14 @@ async function generateSolution(
     const systemPrompt = `You are SnipSolve, a documentation assistant that helps users solve problems using their uploaded knowledge base.
 
 RULES:
-1. If documentation is provided, answer based on it and cite the source document
+1. If documentation is provided, answer based on it and cite sources using this exact format: [Source: filename.pdf]
 2. If no relevant documentation is found, briefly say so and suggest:
    - Upload relevant documentation for this topic
    - Try different search terms
    - Check what documents are currently available
 3. Keep responses concise (2-4 sentences when possible)
-4. Use bullet points for multi-step solutions`
+4. Use bullet points for multi-step solutions
+5. Always include the source citation at the end of information from that document`
 
     const userPrompt = `Captured Screen Content:
 ${capturedText}
@@ -656,9 +657,10 @@ ${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
 ` : ''}
 
 RULES:
-- If documentation contains the answer, cite the source document
+- If documentation contains the answer, cite sources using this exact format: [Source: filename.pdf]
 - If no relevant documentation exists, briefly say so and suggest: uploading relevant docs, rephrasing the question, or checking if the topic is covered in other documents
-- Keep responses concise`
+- Keep responses concise
+- Always include the source citation at the end of information from that document`
     } else {
       // New chat: search KB and respond
       systemPrompt = `You are SnipSolve, a documentation assistant. Answer based on the user's uploaded knowledge base.
@@ -668,8 +670,9 @@ DOCUMENTATION FOUND:
 ${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
 
 RULES:
-- Answer using the documentation above and cite the source
+- Answer using the documentation above and cite sources using this exact format: [Source: filename.pdf]
 - Keep responses concise and factual
+- Always include the source citation at the end of information from that document
 ` : `
 NO MATCHING DOCUMENTATION FOUND.
 
@@ -797,6 +800,71 @@ ipcMain.handle('upload-document', async () => {
 // Get all documents
 ipcMain.handle('get-documents', async () => {
   return Array.from(documentsMetadata.values())
+})
+
+// Get document content (all chunks combined)
+ipcMain.handle('get-document-content', async (event, docId: string) => {
+  try {
+    const doc = documentsMetadata.get(docId)
+    if (!doc) {
+      return { success: false, error: 'Document not found' }
+    }
+
+    const chunks = documentChunks.get(docId)
+    if (!chunks || chunks.length === 0) {
+      return { success: false, error: 'Document content not found' }
+    }
+
+    // Sort chunks by index and combine text
+    const sortedChunks = [...chunks].sort((a, b) => a.chunkIndex - b.chunkIndex)
+    const fullText = sortedChunks.map(c => c.text).join('\n\n')
+
+    return {
+      success: true,
+      document: doc,
+      content: fullText
+    }
+  } catch (error) {
+    console.error('Get document content error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+})
+
+// Download document file
+ipcMain.handle('download-document', async (event, docId: string) => {
+  try {
+    const doc = documentsMetadata.get(docId)
+    if (!doc) {
+      return { success: false, error: 'Document not found' }
+    }
+
+    // Show save dialog
+    const result = await dialog.showSaveDialog({
+      defaultPath: doc.name,
+      filters: [
+        { name: 'Documents', extensions: [doc.type] }
+      ]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, error: 'Download cancelled' }
+    }
+
+    // Copy file to selected location
+    await fs.copyFile(doc.path, result.filePath)
+    console.log(`✅ Document downloaded to ${result.filePath}`)
+
+    return { success: true }
+  } catch (error) {
+    console.error('Download document error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
 })
 
 // Delete document

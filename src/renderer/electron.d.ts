@@ -35,6 +35,13 @@ export interface UploadResult {
   error?: string
 }
 
+export interface DocumentContentResult {
+  success: boolean
+  document?: Document
+  content?: string
+  error?: string
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -89,6 +96,8 @@ export interface ElectronAPI {
   // Document management
   uploadDocument: () => Promise<UploadResult>
   getDocuments: () => Promise<Document[]>
+  getDocumentContent: (docId: string) => Promise<DocumentContentResult>
+  downloadDocument: (docId: string) => Promise<{ success: boolean; error?: string }>
   deleteDocument: (docId: string) => Promise<void>
   // Chat follow-up
   chatFollowup: (request: ChatFollowupRequest) => Promise<ChatFollowupResult>
