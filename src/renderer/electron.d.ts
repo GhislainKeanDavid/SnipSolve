@@ -109,6 +109,27 @@ export interface ElectronAPI {
   // Settings
   getSettings: () => Promise<AppSettings>
   setCaptureShortcut: (shortcut: string) => Promise<SetShortcutResult>
+  // AI Model
+  getModelStatus: () => Promise<{
+    initialized: boolean
+    downloaded: boolean
+    modelPath: string
+    error?: string
+  }>
+  downloadModel: () => Promise<{ success: boolean; message?: string; error?: string }>
+  onModelDownloadProgress: (callback: (progress: {
+    downloaded: number
+    total: number
+    percentage: number
+    mbDownloaded: string
+    mbTotal: string
+  }) => void) => () => void
+  onModelDownloadComplete: (callback: () => void) => () => void
+  onModelDownloadError: (callback: (error: string) => void) => () => void
+  onAIStatus: (callback: (status: {
+    status: 'initializing' | 'downloading' | 'loading' | 'ready' | 'error'
+    message: string
+  }) => void) => () => void
 }
 
 declare global {

@@ -10,14 +10,15 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { randomUUID } from 'crypto'
 import Tesseract from 'tesseract.js'
 
-// Phase 3: OpenAI Integration
-import dotenv from 'dotenv'
-import OpenAI from 'openai'
+// Phase 3: Local AI Integration
+import { ModelManager } from './services/ModelManager'
+import { AIService } from './services/AIService'
 
-// Load environment variables
-dotenv.config()
-
-let openai: OpenAI | null = null
+let modelManager: ModelManager
+let aiService: AIService
+let aiInitializing = false
+let aiInitialized = false
+let aiInitError: string | null = null
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -43,8 +44,16 @@ interface AppSettings {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  captureShortcut: 'CommandOrControl+Shift+S'
+  captureShortcut: 'CommandOrControl+Alt+S'
 }
+
+// Fallback shortcuts to try if primary fails
+const FALLBACK_SHORTCUTS = [
+  'CommandOrControl+Alt+S',
+  'CommandOrControl+Shift+X',
+  'Alt+Shift+S',
+  'CommandOrControl+Shift+C'
+]
 
 let currentSettings: AppSettings = { ...DEFAULT_SETTINGS }
 
@@ -69,32 +78,35 @@ async function saveSettings(settings: AppSettings): Promise<void> {
   console.log('💾 Saved settings to disk')
 }
 
+// Shortcut handler function
+function handleShortcutTrigger() {
+  console.log('Global shortcut triggered!')
+  if (overlayWindow) {
+    if (overlayWindow.isVisible()) {
+      overlayWindow.hide()
+      // Restore main window
+      if (mainWindow) {
+        mainWindow.restore()
+        mainWindow.show()
+      }
+    } else {
+      // Minimize main window to get it out of the way
+      if (mainWindow) {
+        mainWindow.minimize()
+      }
+      overlayWindow.show()
+      overlayWindow.focus()
+    }
+  }
+}
+
 // Register the capture shortcut
 function registerCaptureShortcut(shortcut: string): boolean {
   // Unregister all shortcuts first
   globalShortcut.unregisterAll()
 
   try {
-    const ret = globalShortcut.register(shortcut, () => {
-      console.log('Global shortcut triggered!')
-      if (overlayWindow) {
-        if (overlayWindow.isVisible()) {
-          overlayWindow.hide()
-          // Restore main window
-          if (mainWindow) {
-            mainWindow.restore()
-            mainWindow.show()
-          }
-        } else {
-          // Minimize main window to get it out of the way
-          if (mainWindow) {
-            mainWindow.minimize()
-          }
-          overlayWindow.show()
-          overlayWindow.focus()
-        }
-      }
-    })
+    const ret = globalShortcut.register(shortcut, handleShortcutTrigger)
 
     if (ret) {
       console.log(`✅ Shortcut registered: ${shortcut}`)
@@ -107,6 +119,25 @@ function registerCaptureShortcut(shortcut: string): boolean {
     console.error(`❌ Error registering shortcut: ${error}`)
     return false
   }
+}
+
+// Register shortcut with fallbacks
+function registerShortcutWithFallbacks(preferredShortcut: string): { success: boolean; shortcut: string } {
+  // Try the preferred shortcut first
+  if (registerCaptureShortcut(preferredShortcut)) {
+    return { success: true, shortcut: preferredShortcut }
+  }
+
+  // Try fallback shortcuts
+  for (const fallback of FALLBACK_SHORTCUTS) {
+    if (fallback !== preferredShortcut && registerCaptureShortcut(fallback)) {
+      console.log(`⚠️ Using fallback shortcut: ${fallback}`)
+      return { success: true, shortcut: fallback }
+    }
+  }
+
+  console.error('❌ All shortcut registrations failed')
+  return { success: false, shortcut: preferredShortcut }
 }
 
 // Initialize Phase 2 systems
@@ -194,16 +225,104 @@ async function loadChats(): Promise<any[]> {
   return [{ id: 'general', type: 'general', title: 'General', chatHistory: [] }]
 }
 
-// Phase 3: Initialize OpenAI
-function initializePhase3() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (apiKey && apiKey !== 'your_openai_api_key_here') {
-    openai = new OpenAI({ apiKey })
-    console.log('✅ Phase 3: OpenAI initialized successfully')
+// Phase 3: Initialize Local AI
+async function initializePhase3() {
+  if (aiInitializing || aiInitialized) {
+    console.log('⚠️ AI already initializing or initialized')
+    return aiInitialized
+  }
+
+  aiInitializing = true
+  aiInitError = null
+
+  try {
+    console.log('🧠 Initializing Local AI...')
+    console.log('⏳ This may take 5-30 minutes on first launch (downloading 2.4GB model)...')
+
+    // Send status to renderer
+    if (mainWindow) {
+      mainWindow.webContents.send('ai-status', {
+        status: 'initializing',
+        message: 'Initializing AI model (may take several minutes on first launch)...'
+      })
+    }
+
+    // Initialize model manager
+    modelManager = new ModelManager()
+
+    // Check if model needs downloading
+    const needsDownload = !(await modelManager.isModelAvailable())
+    if (needsDownload) {
+      console.log('📥 Model not found. Starting download (2.4GB)...')
+      if (mainWindow) {
+        mainWindow.webContents.send('ai-status', {
+          status: 'downloading',
+          message: 'Downloading AI model (2.4GB, first time only)...'
+        })
+      }
+    }
+
+    // Set up download progress listener
+    modelManager.on('download-progress', (progress) => {
+      // Send progress to renderer if window is available
+      if (mainWindow) {
+        mainWindow.webContents.send('model-download-progress', progress)
+      }
+      console.log(`📥 Model download: ${progress.percentage}% (${progress.mbDownloaded}/${progress.mbTotal} MB)`)
+    })
+
+    modelManager.on('download-complete', () => {
+      console.log('✅ Model download complete')
+      if (mainWindow) {
+        mainWindow.webContents.send('model-download-complete')
+        mainWindow.webContents.send('ai-status', {
+          status: 'loading',
+          message: 'Model downloaded. Loading into memory...'
+        })
+      }
+    })
+
+    modelManager.on('download-error', (error) => {
+      console.error('❌ Model download error:', error)
+      aiInitError = error.message
+      if (mainWindow) {
+        mainWindow.webContents.send('model-download-error', error.message)
+        mainWindow.webContents.send('ai-status', {
+          status: 'error',
+          message: `Model download failed: ${error.message}`
+        })
+      }
+    })
+
+    // Initialize AI service
+    console.log('🔄 Loading model into memory (30-60 seconds)...')
+    aiService = new AIService(modelManager)
+    await aiService.initialize()
+
+    aiInitialized = true
+    aiInitializing = false
+    console.log('✅ Phase 3: Local AI initialized successfully')
+
+    if (mainWindow) {
+      mainWindow.webContents.send('ai-status', {
+        status: 'ready',
+        message: 'AI model ready!'
+      })
+    }
+
     return true
-  } else {
-    console.log('⚠️ Phase 3: OpenAI API key not configured')
-    console.log('   Add OPENAI_API_KEY to your .env file to enable AI solutions')
+  } catch (error) {
+    console.error('❌ Failed to initialize Local AI:', error)
+    aiInitializing = false
+    aiInitError = error instanceof Error ? error.message : 'Unknown error'
+
+    if (mainWindow) {
+      mainWindow.webContents.send('ai-status', {
+        status: 'error',
+        message: `AI initialization failed: ${aiInitError}`
+      })
+    }
+
     return false
   }
 }
@@ -213,8 +332,15 @@ async function generateSolution(
   capturedText: string,
   relevantDocs: Array<{ docName: string; text: string; score: number }>
 ): Promise<string> {
-  if (!openai) {
-    return 'AI solutions unavailable. Please configure your OpenAI API key in the .env file.'
+  // Check AI readiness
+  if (!aiService || !aiService.isInitialized()) {
+    if (aiInitError) {
+      return `AI unavailable: ${aiInitError}\n\nPlease restart the app or check logs.`
+    }
+    if (aiInitializing) {
+      return 'AI model is initializing... This may take several minutes on first launch (downloading 2.4GB model). Please wait and try again.'
+    }
+    return 'AI service not initialized. Please restart the app.'
   }
 
   try {
@@ -227,17 +353,19 @@ async function generateSolution(
       }
     }
 
-    const systemPrompt = `You are SnipSolve, a documentation assistant that helps users solve problems using their uploaded knowledge base.
+    const systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the provided documentation. You NEVER make up information.
 
-RULES:
-1. If documentation is provided, answer based on it and cite sources using this exact format: [Source: filename.pdf]
-2. If no relevant documentation is found, briefly say so and suggest:
+CRITICAL RULES:
+1. ONLY use information from the DOCUMENTATION section below. Do NOT add any information from your training data.
+2. If the documentation contains a procedure or steps, include ALL steps exactly as written - never truncate or summarize.
+3. Quote or paraphrase directly from the documentation. Do not invent additional details.
+4. Always cite sources using: [Source: filename.pdf]
+5. If the documentation does NOT contain the answer, respond with:
+   "I could not find information about this in the uploaded documents. To help you better:
    - Upload relevant documentation for this topic
-   - Try different search terms
-   - Check what documents are currently available
-3. Keep responses concise (2-4 sentences when possible)
-4. Use bullet points for multi-step solutions
-5. Always include the source citation at the end of information from that document`
+   - Try rephrasing your question
+   - Check what documents are currently available in the Knowledge Base"
+6. NEVER guess or provide information not in the documentation.`
 
     const userPrompt = `Captured Screen Content:
 ${capturedText}
@@ -245,22 +373,23 @@ ${context}
 
 Please analyze this and provide a solution or explanation.`
 
-    console.log('Sending request to OpenAI...')
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    console.log('Generating AI solution with local model...')
+    const response = await aiService.createChatCompletion(
+      [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ],
-      max_tokens: 500,
-      temperature: 0.2 // Low temperature for factual, documentation-based responses
-    })
+      {
+        maxTokens: 1000,
+        temperature: 0.1  // Lower temperature for more factual responses
+      }
+    )
 
     const solution = response.choices[0]?.message?.content || 'No solution generated.'
     console.log('✅ AI solution generated successfully')
     return solution
   } catch (error) {
-    console.error('OpenAI API error:', error)
+    console.error('Local AI error:', error)
     return `Error generating solution: ${error instanceof Error ? error.message : 'Unknown error'}`
   }
 }
@@ -301,6 +430,7 @@ async function performRealOCR(imageBuffer: Buffer): Promise<string> {
 }
 
 // Simple keyword-based search through document chunks
+// Returns matching chunks plus adjacent chunks to ensure complete procedures
 function searchDocuments(query: string, topK: number = 3): Array<{ docName: string; text: string; score: number }> {
   if (!query || query.trim().length === 0) {
     return []
@@ -311,10 +441,10 @@ function searchDocuments(query: string, topK: number = 3): Array<{ docName: stri
     return []
   }
 
-  const results: Array<{ docName: string; text: string; score: number }> = []
+  const matchingChunks: Array<{ docId: string; docName: string; chunkIndex: number; text: string; score: number }> = []
 
-  // Search through all chunks
-  for (const chunks of documentChunks.values()) {
+  // Search through all chunks and track their indices
+  for (const [docId, chunks] of documentChunks.entries()) {
     for (const chunk of chunks) {
       const chunkText = chunk.text.toLowerCase()
 
@@ -329,8 +459,10 @@ function searchDocuments(query: string, topK: number = 3): Array<{ docName: stri
       }
 
       if (score > 0) {
-        results.push({
+        matchingChunks.push({
+          docId,
           docName: chunk.docName,
+          chunkIndex: chunk.chunkIndex,
           text: chunk.text,
           score
         })
@@ -338,8 +470,42 @@ function searchDocuments(query: string, topK: number = 3): Array<{ docName: stri
     }
   }
 
-  // Sort by score descending and return top K
-  return results
+  // Sort by score descending
+  matchingChunks.sort((a, b) => b.score - a.score)
+
+  // Take top matches and expand to include adjacent chunks for complete context
+  const selectedChunks = matchingChunks.slice(0, Math.min(topK, matchingChunks.length))
+  const expandedResults: Map<string, { docName: string; text: string; score: number }> = new Map()
+
+  for (const match of selectedChunks) {
+    const docChunks = documentChunks.get(match.docId)
+    if (!docChunks) continue
+
+    // Include the matching chunk and 1 chunk before/after for context
+    const startIdx = Math.max(0, match.chunkIndex - 1)
+    const endIdx = Math.min(docChunks.length - 1, match.chunkIndex + 1)
+
+    // Combine adjacent chunks into one result
+    const combinedText: string[] = []
+    for (let i = startIdx; i <= endIdx; i++) {
+      const chunk = docChunks.find(c => c.chunkIndex === i)
+      if (chunk) {
+        combinedText.push(chunk.text)
+      }
+    }
+
+    const key = `${match.docId}-${startIdx}-${endIdx}`
+    if (!expandedResults.has(key)) {
+      expandedResults.set(key, {
+        docName: match.docName,
+        text: combinedText.join('\n'),
+        score: match.score
+      })
+    }
+  }
+
+  // Convert to array and return
+  return Array.from(expandedResults.values())
     .sort((a, b) => b.score - a.score)
     .slice(0, topK)
 }
@@ -452,9 +618,16 @@ app.whenReady().then(async () => {
   createMainWindow()
   createOverlayWindow()
 
-  // Load settings and register shortcut
+  // Load settings and register shortcut with fallback support
   currentSettings = await loadSettings()
-  registerCaptureShortcut(currentSettings.captureShortcut)
+  const shortcutResult = registerShortcutWithFallbacks(currentSettings.captureShortcut)
+
+  // Update settings if a fallback was used
+  if (shortcutResult.success && shortcutResult.shortcut !== currentSettings.captureShortcut) {
+    currentSettings.captureShortcut = shortcutResult.shortcut
+    await saveSettings(currentSettings)
+    console.log(`📝 Settings updated with working shortcut: ${shortcutResult.shortcut}`)
+  }
 
   // OCR is now on-demand using Tesseract.js
   ocrReady = true
@@ -463,8 +636,10 @@ app.whenReady().then(async () => {
   // Initialize Phase 2 systems (in background)
   initializePhase2()
 
-  // Initialize Phase 3: OpenAI
-  initializePhase3()
+  // Initialize Phase 3: Local AI (this may take time if model needs to download)
+  initializePhase3().catch(error => {
+    console.error('Failed to initialize AI:', error)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -580,21 +755,24 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
 
 // Generate a short title for a conversation using AI
 async function generateChatTitle(message: string): Promise<string> {
-  if (!openai) return message.slice(0, 30) + (message.length > 30 ? '...' : '')
+  if (!aiService || !aiService.isInitialized()) {
+    return message.slice(0, 30) + (message.length > 30 ? '...' : '')
+  }
 
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    const response = await aiService.createChatCompletion(
+      [
         {
           role: 'system',
           content: 'Generate a very short title (3-5 words max) that summarizes the user\'s question. No quotes, no punctuation at the end. Just the title.'
         },
         { role: 'user', content: message }
       ],
-      max_tokens: 20,
-      temperature: 0.3
-    })
+      {
+        maxTokens: 20,
+        temperature: 0.3
+      }
+    )
     return response.choices[0]?.message?.content?.trim() || message.slice(0, 30)
   } catch (error) {
     console.error('Title generation error:', error)
@@ -617,10 +795,10 @@ ipcMain.handle('chat-followup', async (event, data: {
   try {
     console.log('Processing chat message...')
 
-    if (!openai) {
+    if (!aiService || !aiService.isInitialized()) {
       return {
         success: false,
-        error: 'OpenAI not configured. Please add your API key to .env file.'
+        error: 'AI service is not initialized. Model may still be loading.'
       }
     }
 
@@ -635,7 +813,8 @@ ipcMain.handle('chat-followup', async (event, data: {
     let relevantDocs = data.captureContext.relevantDocs
     if (data.isNewChat || (data.captureContext.text === '' && relevantDocs.length === 0)) {
       console.log('Searching KB for new chat message...')
-      relevantDocs = searchDocuments(data.message, 3)
+      // Get more chunks (6) for direct chats to ensure complete procedures
+      relevantDocs = searchDocuments(data.message, 6)
     }
 
     // Build system prompt based on chat type
@@ -645,7 +824,7 @@ ipcMain.handle('chat-followup', async (event, data: {
 
     if (isCaptureChat) {
       // Capture follow-up: include capture context
-      systemPrompt = `You are SnipSolve, a documentation assistant. Answer based on the provided documentation when available.
+      systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the provided documentation. You NEVER make up information.
 
 CONTEXT FROM CAPTURE:
 Screen content: "${data.captureContext.text}"
@@ -656,30 +835,34 @@ DOCUMENTATION:
 ${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
 ` : ''}
 
-RULES:
-- If documentation contains the answer, cite sources using this exact format: [Source: filename.pdf]
-- If no relevant documentation exists, briefly say so and suggest: uploading relevant docs, rephrasing the question, or checking if the topic is covered in other documents
-- Keep responses concise
-- Always include the source citation at the end of information from that document`
+CRITICAL RULES:
+1. ONLY use information from the DOCUMENTATION section. Do NOT add information from your training data.
+2. If documentation contains procedures or steps, include ALL steps exactly as written.
+3. Always cite sources: [Source: filename.pdf]
+4. If the answer is NOT in the documentation, say: "I could not find this information in the uploaded documents. Please upload relevant documentation or rephrase your question."
+5. NEVER guess or invent information.`
     } else {
       // New chat: search KB and respond
-      systemPrompt = `You are SnipSolve, a documentation assistant. Answer based on the user's uploaded knowledge base.
+      systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the user's uploaded knowledge base. You NEVER make up information.
 
 ${relevantDocs.length > 0 ? `
 DOCUMENTATION FOUND:
 ${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
 
-RULES:
-- Answer using the documentation above and cite sources using this exact format: [Source: filename.pdf]
-- Keep responses concise and factual
-- Always include the source citation at the end of information from that document
+CRITICAL RULES:
+1. ONLY use information from the DOCUMENTATION above. Do NOT add information from your training data.
+2. If documentation contains procedures or steps, include ALL steps exactly as written - never truncate.
+3. Always cite sources: [Source: filename.pdf]
+4. NEVER guess or invent information not in the documentation.
 ` : `
 NO MATCHING DOCUMENTATION FOUND.
 
-RULES:
-- Briefly inform the user no relevant docs were found for their query
-- Suggest they: upload relevant documentation, try different keywords, or check what documents are available
-- Keep response to 1-2 sentences`}`
+Respond with: "I could not find information about this in the uploaded documents. To help you better:
+- Upload relevant documentation for this topic
+- Try different search keywords
+- Check what documents are available in your Knowledge Base"
+
+Do NOT attempt to answer from your training data.`}`
     }
 
     // Build messages array with chat history
@@ -689,13 +872,14 @@ RULES:
       { role: 'user', content: data.message }
     ]
 
-    console.log('Sending follow-up to OpenAI...')
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: messages,
-      max_tokens: 500,
-      temperature: 0.2 // Low temperature for factual, documentation-based responses
-    })
+    console.log('Generating follow-up response with local model...')
+    const response = await aiService.createChatCompletion(
+      messages as any,
+      {
+        maxTokens: 1000,
+        temperature: 0.1  // Lower temperature for more factual, grounded responses
+      }
+    )
 
     const reply = response.choices[0]?.message?.content || 'No response generated.'
     console.log('✅ Follow-up response generated')
@@ -934,5 +1118,43 @@ ipcMain.handle('set-capture-shortcut', async (event, shortcut: string) => {
     // Re-register the old shortcut if new one failed
     registerCaptureShortcut(currentSettings.captureShortcut)
     return { success: false, error: 'Failed to register shortcut. It may be in use by another application.' }
+  }
+})
+
+// AI Model: Get model status
+ipcMain.handle('get-model-status', async () => {
+  if (!modelManager) {
+    return { initialized: false, downloaded: false, error: 'Model manager not initialized' }
+  }
+
+  const isDownloaded = await modelManager.isModelAvailable()
+  const isInitialized = aiService ? aiService.isInitialized() : false
+
+  return {
+    initialized: isInitialized,
+    downloaded: isDownloaded,
+    modelPath: modelManager.getModelPath()
+  }
+})
+
+// AI Model: Manually trigger model download (if needed)
+ipcMain.handle('download-model', async () => {
+  if (!modelManager) {
+    return { success: false, error: 'Model manager not initialized' }
+  }
+
+  try {
+    const isAvailable = await modelManager.isModelAvailable()
+    if (isAvailable) {
+      return { success: true, message: 'Model already downloaded' }
+    }
+
+    await modelManager.downloadModel()
+    return { success: true, message: 'Model downloaded successfully' }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
   }
 })

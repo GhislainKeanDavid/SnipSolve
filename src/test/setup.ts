@@ -18,7 +18,13 @@ const mockElectronAPI = {
   loadChats: vi.fn(() => Promise.resolve([])),
   saveChats: vi.fn(),
   getSettings: vi.fn(() => Promise.resolve({ captureShortcut: 'CommandOrControl+Shift+S' })),
-  setCaptureShortcut: vi.fn()
+  setCaptureShortcut: vi.fn(),
+  getModelStatus: vi.fn(() => Promise.resolve({ initialized: true, downloaded: true, modelPath: '' })),
+  downloadModel: vi.fn(() => Promise.resolve({ success: true })),
+  onModelDownloadProgress: vi.fn(() => () => {}),
+  onModelDownloadComplete: vi.fn(() => () => {}),
+  onModelDownloadError: vi.fn(() => () => {}),
+  onAIStatus: vi.fn(() => () => {})
 }
 
 // @ts-expect-error - Partial window mock for testing
