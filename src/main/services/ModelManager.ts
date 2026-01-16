@@ -13,8 +13,8 @@ export interface DownloadProgress {
   mbTotal: string
 }
 
-// Expected model size in bytes (~2.4GB)
-const EXPECTED_MODEL_SIZE = 2393232608
+// Expected model size in bytes (~1.6GB for Gemma 2 2B Q4_K_M)
+const EXPECTED_MODEL_SIZE = 1637608704
 
 export class ModelManager extends EventEmitter {
   private modelDir: string
@@ -26,11 +26,12 @@ export class ModelManager extends EventEmitter {
     super()
     const dataDir = path.join(os.homedir(), '.snipsolve')
     this.modelDir = path.join(dataDir, 'models')
-    this.modelName = 'Phi-3-mini-4k-instruct-q4.gguf'
+    this.modelName = 'gemma-2-2b-it-Q4_K_M.gguf'
     this.modelPath = path.join(this.modelDir, this.modelName)
 
-    // Phi-3-mini-4k-instruct Q4_K_M quantized model (~2.4GB)
-    this.modelUrl = 'https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf'
+    // Gemma 2 2B Instruct Q4_K_M quantized model (~1.6GB)
+    // Better RAG performance, 2x larger context (8K), and lower memory footprint than Phi-3
+    this.modelUrl = 'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf'
   }
 
   /**

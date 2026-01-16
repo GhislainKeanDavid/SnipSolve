@@ -57,7 +57,7 @@ export class AIService {
 
       // Create context (working memory for the model)
       this.context = await this.model.createContext({
-        contextSize: 4096 // Phi-3 supports 4k context
+        contextSize: 8192 // Gemma 2 2B supports 8k context (2x larger than Phi-3)
       })
 
       this.initialized = true
@@ -103,23 +103,34 @@ export class AIService {
         contextSequence: contextSequence
       })
 
-      // Build the prompt from messages
+      // Build the prompt from messages using Gemma 2's chat template
+      // Gemma 2 format: <start_of_turn>user\n{content}<end_of_turn>\n<start_of_turn>model\n
       let prompt = ''
+
+      // Combine system message with first user message (Gemma 2 doesn't have separate system role)
+      const systemMessage = messages.find(m => m.role === 'system')?.content || ''
+
       for (const message of messages) {
-        if (message.role === 'system') {
-          prompt += `System: ${message.content}\n\n`
-        } else if (message.role === 'user') {
-          prompt += `User: ${message.content}\n\n`
+        if (message.role === 'user') {
+          prompt += '<start_of_turn>user\n'
+          // Include system message with the first user message
+          if (systemMessage && !prompt.includes(systemMessage)) {
+            prompt += `${systemMessage}\n\n`
+          }
+          prompt += `${message.content}<end_of_turn>\n`
         } else if (message.role === 'assistant') {
-          prompt += `Assistant: ${message.content}\n\n`
+          prompt += `<start_of_turn>model\n${message.content}<end_of_turn>\n`
         }
       }
-      prompt += 'Assistant: '
+
+      // Start the model's response
+      prompt += '<start_of_turn>model\n'
 
       // Generate response
+      // Gemma 2 performs better at lower temperatures for factual/RAG tasks
       const response = await session.prompt(prompt, {
-        maxTokens: options?.maxTokens || 500,
-        temperature: options?.temperature ?? 0.2
+        maxTokens: options?.maxTokens || 512,
+        temperature: options?.temperature ?? 0.1
       })
 
       // Dispose of the sequence after use to free resources

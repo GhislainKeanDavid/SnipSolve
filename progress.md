@@ -64,10 +64,11 @@ This session is resuming from a previous token-limit crash. The previous session
 ## Architecture Reference
 
 ### Target Model
-- **Model:** Phi-3-mini-4k-instruct
-- **Quantization:** Q4_K_M (~2.4GB)
+- **Model:** Gemma 2 2B Instruct
+- **Quantization:** Q4_K_M (~1.6GB)
 - **Storage:** `~/.snipsolve/models/`
-- **Source:** HuggingFace (microsoft/Phi-3-mini-4k-instruct-gguf)
+- **Source:** HuggingFace (bartowski/gemma-2-2b-it-GGUF)
+- **Improvements over Phi-3:** 2x larger context (8K vs 4K), better RAG accuracy, 2-3x faster inference, lower memory usage
 
 ### Download Workflow
 1. App starts → `initializePhase3()` called

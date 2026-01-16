@@ -344,32 +344,11 @@ async function generateSolution(
   }
 
   try {
-    // Build context from relevant documents
-    let context = ''
-    if (relevantDocs.length > 0) {
-      context = '\n\nRelevant Documentation:\n'
-      for (const doc of relevantDocs) {
-        context += `\n[From ${doc.docName}]:\n${doc.text}\n`
-      }
-    }
-
-    const systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the provided documentation. You NEVER make up information.
-
-CRITICAL RULES:
-1. ONLY use information from the DOCUMENTATION section below. Do NOT add any information from your training data.
-2. If the documentation contains a procedure or steps, include ALL steps exactly as written - never truncate or summarize.
-3. Quote or paraphrase directly from the documentation. Do not invent additional details.
-4. Always cite sources using: [Source: filename.pdf]
-5. If the documentation does NOT contain the answer, respond with:
-   "I could not find information about this in the uploaded documents. To help you better:
-   - Upload relevant documentation for this topic
-   - Try rephrasing your question
-   - Check what documents are currently available in the Knowledge Base"
-6. NEVER guess or provide information not in the documentation.`
+    // Build system prompt using centralized function
+    const systemPrompt = buildSystemPrompt({ relevantDocs })
 
     const userPrompt = `Captured Screen Content:
 ${capturedText}
-${context}
 
 Please analyze this and provide a solution or explanation.`
 
@@ -380,18 +359,138 @@ Please analyze this and provide a solution or explanation.`
         { role: 'user', content: userPrompt }
       ],
       {
-        maxTokens: 1000,
-        temperature: 0.1  // Lower temperature for more factual responses
+        maxTokens: 1500,  // Increased from 1000 to allow complete responses
+        temperature: 0.05  // Reduced from 0.1 for even more deterministic output
       }
     )
 
     const solution = response.choices[0]?.message?.content || 'No solution generated.'
     console.log('✅ AI solution generated successfully')
+
+    // Validate response for potential hallucinations
+    const validation = validateAIResponse(solution, relevantDocs)
+    if (!validation.isValid && validation.warning) {
+      console.warn('⚠️ Validation warning:', validation.warning)
+      return `${solution}\n\n${validation.warning}`
+    }
+
     return solution
   } catch (error) {
     console.error('Local AI error:', error)
     return `Error generating solution: ${error instanceof Error ? error.message : 'Unknown error'}`
   }
+}
+
+// Build system prompt for AI interactions
+function buildSystemPrompt(options: {
+  relevantDocs: Array<{ docName: string; text: string; score: number }>
+  captureContext?: {
+    text: string
+    aiSolution: string
+  }
+}): string {
+  const { relevantDocs, captureContext } = options
+
+  // Base prompt with anti-hallucination rules
+  const baseRules = `You are a documentation assistant. Your ONLY job is to extract and present information EXACTLY as it appears in the provided documentation.
+
+CRITICAL RULES (NEVER VIOLATE):
+1. If information is NOT in the documentation below, say "I cannot find this information in the documentation"
+2. NEVER make up, infer, or generate information
+3. NEVER complete incomplete information - if steps are cut off, stop there
+4. ONLY use direct quotes and exact information from the documentation
+5. If you're unsure, say you don't know
+
+FORMAT YOUR RESPONSE:
+- Put procedure titles on their own line (no number before the title)
+- Put each step on a new line with proper numbering (1., 2., 3.)
+- Add blank lines between sections
+- Include ALL steps EXACTLY as written in the documentation
+- Stop immediately when the documentation ends - do NOT continue or complete the thought
+
+CITE SOURCES:
+- Always cite: [Source: filename.pdf]
+- Never add attributions or signatures
+
+WHAT YOU MUST NEVER DO:
+- ❌ Add information not explicitly in the documentation
+- ❌ Summarize or paraphrase - use exact wording
+- ❌ Add generic advice or best practices
+- ❌ Complete truncated procedures
+- ❌ Add attributions or signatures`
+
+  // Add capture context if provided
+  let contextSection = ''
+  if (captureContext) {
+    contextSection = `\n\nCONTEXT FROM CAPTURE:
+Screen content: "${captureContext.text}"
+Previous response: "${captureContext.aiSolution}"`
+  }
+
+  // Add documentation section
+  let docsSection = ''
+  if (relevantDocs.length > 0) {
+    docsSection = `\n\nDOCUMENTATION:
+${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}`
+  } else {
+    docsSection = `\n\nNo relevant documentation found. Say EXACTLY: "I could not find information about this in the uploaded documents. Please upload relevant documentation or try different search keywords."`
+  }
+
+  return `${baseRules}${contextSection}${docsSection}`
+}
+
+// Validate AI response to detect potential hallucinations
+function validateAIResponse(
+  response: string,
+  relevantDocs: Array<{ docName: string; text: string; score: number }>
+): { isValid: boolean; warning?: string } {
+  // Check if response claims no information found
+  const noInfoPhrases = [
+    'cannot find',
+    'could not find',
+    'no information',
+    'not in the documentation',
+    "don't know"
+  ]
+
+  const lowerResponse = response.toLowerCase()
+  const hasNoInfoPhrase = noInfoPhrases.some(phrase => lowerResponse.includes(phrase))
+
+  // If AI says no info, but we have relevant docs, that's suspicious
+  if (hasNoInfoPhrase && relevantDocs.length === 0) {
+    return { isValid: true }
+  }
+
+  // Check for generic/vague responses that might be hallucinated
+  const genericPhrases = [
+    'best practice',
+    'it is recommended',
+    'you should',
+    'typically',
+    'usually',
+    'in general',
+    'standard procedure is'
+  ]
+
+  const hasGenericPhrase = genericPhrases.some(phrase => lowerResponse.includes(phrase))
+
+  // If response has generic phrases but no source citations, warn
+  if (hasGenericPhrase && !lowerResponse.includes('[source:') && !lowerResponse.includes('[from ')) {
+    return {
+      isValid: false,
+      warning: '⚠️ Warning: Response may contain generic information not from your documents.'
+    }
+  }
+
+  // If response is very short (< 50 chars) and we have docs, might be incomplete
+  if (response.trim().length < 50 && relevantDocs.length > 0 && !hasNoInfoPhrase) {
+    return {
+      isValid: false,
+      warning: '⚠️ Warning: Response seems incomplete. Try rephrasing your question.'
+    }
+  }
+
+  return { isValid: true }
 }
 
 // Real OCR using Tesseract.js (English + Filipino for Taglish support)
@@ -431,7 +530,7 @@ async function performRealOCR(imageBuffer: Buffer): Promise<string> {
 
 // Simple keyword-based search through document chunks
 // Returns matching chunks plus adjacent chunks to ensure complete procedures
-function searchDocuments(query: string, topK: number = 3): Array<{ docName: string; text: string; score: number }> {
+function searchDocuments(query: string, topK: number = 5): Array<{ docName: string; text: string; score: number }> {
   if (!query || query.trim().length === 0) {
     return []
   }
@@ -545,8 +644,8 @@ async function extractTextFromFile(filePath: string): Promise<string> {
 // Chunk document text
 async function chunkDocument(text: string): Promise<string[]> {
   const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 500,
-    chunkOverlap: 50
+    chunkSize: 800,  // Increased from 500 to capture more context per chunk
+    chunkOverlap: 150  // Increased from 50 to maintain better context continuity
   })
 
   const chunks = await splitter.splitText(text)
@@ -713,8 +812,8 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
     const text = await performRealOCR(imageBuffer)
     console.log('OCR Result:', text.substring(0, 100) + (text.length > 100 ? '...' : ''))
 
-    // Search for relevant documents
-    const relevantDocs = searchDocuments(text, 3)
+    // Search for relevant documents (increased to 5 for better context)
+    const relevantDocs = searchDocuments(text, 5)
     console.log(`Found ${relevantDocs.length} relevant document chunks`)
 
     // Convert image to base64 for transmission
@@ -764,7 +863,7 @@ async function generateChatTitle(message: string): Promise<string> {
       [
         {
           role: 'system',
-          content: 'Generate a very short title (3-5 words max) that summarizes the user\'s question. No quotes, no punctuation at the end. Just the title.'
+          content: 'Generate a very short title (3-5 words max) in ENGLISH that captures the main topic of the user\'s question. Always use English regardless of the language of the user\'s message. No quotes, no punctuation at the end. Just the title in English.'
         },
         { role: 'user', content: message }
       ],
@@ -813,57 +912,21 @@ ipcMain.handle('chat-followup', async (event, data: {
     let relevantDocs = data.captureContext.relevantDocs
     if (data.isNewChat || (data.captureContext.text === '' && relevantDocs.length === 0)) {
       console.log('Searching KB for new chat message...')
-      // Get more chunks (6) for direct chats to ensure complete procedures
-      relevantDocs = searchDocuments(data.message, 6)
+      // Get more chunks (8) for direct chats to ensure complete procedures
+      relevantDocs = searchDocuments(data.message, 8)
     }
 
     // Build system prompt based on chat type
     const isCaptureChat = data.captureContext.text !== ''
 
-    let systemPrompt: string
-
-    if (isCaptureChat) {
-      // Capture follow-up: include capture context
-      systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the provided documentation. You NEVER make up information.
-
-CONTEXT FROM CAPTURE:
-Screen content: "${data.captureContext.text}"
-Previous response: "${data.captureContext.aiSolution}"
-
-${relevantDocs.length > 0 ? `
-DOCUMENTATION:
-${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
-` : ''}
-
-CRITICAL RULES:
-1. ONLY use information from the DOCUMENTATION section. Do NOT add information from your training data.
-2. If documentation contains procedures or steps, include ALL steps exactly as written.
-3. Always cite sources: [Source: filename.pdf]
-4. If the answer is NOT in the documentation, say: "I could not find this information in the uploaded documents. Please upload relevant documentation or rephrase your question."
-5. NEVER guess or invent information.`
-    } else {
-      // New chat: search KB and respond
-      systemPrompt = `You are SnipSolve, a documentation assistant. You ONLY answer based on the user's uploaded knowledge base. You NEVER make up information.
-
-${relevantDocs.length > 0 ? `
-DOCUMENTATION FOUND:
-${relevantDocs.map(doc => `[${doc.docName}]: ${doc.text}`).join('\n\n')}
-
-CRITICAL RULES:
-1. ONLY use information from the DOCUMENTATION above. Do NOT add information from your training data.
-2. If documentation contains procedures or steps, include ALL steps exactly as written - never truncate.
-3. Always cite sources: [Source: filename.pdf]
-4. NEVER guess or invent information not in the documentation.
-` : `
-NO MATCHING DOCUMENTATION FOUND.
-
-Respond with: "I could not find information about this in the uploaded documents. To help you better:
-- Upload relevant documentation for this topic
-- Try different search keywords
-- Check what documents are available in your Knowledge Base"
-
-Do NOT attempt to answer from your training data.`}`
-    }
+    // Use centralized system prompt builder
+    const systemPrompt = buildSystemPrompt({
+      relevantDocs,
+      captureContext: isCaptureChat ? {
+        text: data.captureContext.text,
+        aiSolution: data.captureContext.aiSolution
+      } : undefined
+    })
 
     // Build messages array with chat history
     const messages: Array<{ role: 'system' | 'user' | 'assistant', content: string }> = [
@@ -876,17 +939,25 @@ Do NOT attempt to answer from your training data.`}`
     const response = await aiService.createChatCompletion(
       messages as any,
       {
-        maxTokens: 1000,
-        temperature: 0.1  // Lower temperature for more factual, grounded responses
+        maxTokens: 1500,  // Increased from 1000 to allow complete responses
+        temperature: 0.05  // Reduced from 0.1 for more deterministic, factual output
       }
     )
 
     const reply = response.choices[0]?.message?.content || 'No response generated.'
     console.log('✅ Follow-up response generated')
 
+    // Validate response for potential hallucinations
+    const validation = validateAIResponse(reply, relevantDocs)
+    let finalReply = reply
+    if (!validation.isValid && validation.warning) {
+      console.warn('⚠️ Validation warning:', validation.warning)
+      finalReply = `${reply}\n\n${validation.warning}`
+    }
+
     return {
       success: true,
-      reply: reply,
+      reply: finalReply,
       generatedTitle: generatedTitle
     }
   } catch (error) {

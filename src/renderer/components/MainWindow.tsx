@@ -533,17 +533,6 @@ function MainWindow() {
             <Home className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setActiveTab('chat')}
-            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
-              activeTab === 'chat'
-                ? 'bg-indigo-600 text-white'
-                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-            title="Chat"
-          >
-            <MessageSquare className="w-5 h-5" />
-          </button>
-          <button
             onClick={() => setActiveTab('captures')}
             className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
               activeTab === 'captures'
@@ -553,6 +542,17 @@ function MainWindow() {
             title="Captures"
           >
             <History className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+              activeTab === 'chat'
+                ? 'bg-indigo-600 text-white'
+                : 'hover:bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+            title="Chat"
+          >
+            <MessageSquare className="w-5 h-5" />
           </button>
           <button
             onClick={() => setActiveTab('documents')}
@@ -816,7 +816,9 @@ function MainWindow() {
                               </div>
                             </div>
                             <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-4">
-                              <p className="text-sm text-gray-200 whitespace-pre-wrap">{result.aiSolution}</p>
+                              <div className="text-sm text-gray-200">
+                                {renderMessageWithSources(result.aiSolution)}
+                              </div>
                             </div>
                           </div>
                         )}
