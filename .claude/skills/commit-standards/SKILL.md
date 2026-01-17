@@ -19,6 +19,11 @@ Follow **Conventional Commits** specification:
 [optional footer(s)]
 ```
 
+**IMPORTANT:** Do NOT include AI tool attribution in commit messages:
+- ❌ No "Generated with Claude Code" footers
+- ❌ No "Co-Authored-By: Claude" footers
+- ✅ Commits should appear as if written by the developer
+
 ### Types
 
 - **feat**: New feature
@@ -125,6 +130,13 @@ feat(auth): this commit adds a new authentication system with JWT tokens and als
 
 # Non-descriptive
 update stuff
+
+# AI tool attribution (DO NOT DO THIS)
+feat(auth): add password reset
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 ```
 
 ## Branch Naming Conventions
