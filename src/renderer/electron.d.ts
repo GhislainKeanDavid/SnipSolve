@@ -11,6 +11,7 @@ export interface OCRResult {
   relevantDocs: RelevantDoc[]
   image: string
   aiSolution: string
+  sources: string[]
 }
 
 export interface CaptureResult {
@@ -45,6 +46,7 @@ export interface DocumentContentResult {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  sources?: string[]  // Only present for assistant messages
 }
 
 export interface ChatFollowupRequest {
@@ -62,6 +64,7 @@ export interface ChatFollowupRequest {
 export interface ChatFollowupResult {
   success: boolean
   reply?: string
+  sources?: string[]
   error?: string
   generatedTitle?: string
 }

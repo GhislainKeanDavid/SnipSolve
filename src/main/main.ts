@@ -8,11 +8,10 @@ import os from 'os'
 // import { LocalIndex } from 'vectra'
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { randomUUID } from 'crypto'
-import Tesseract from 'tesseract.js'
-
 // Phase 3: Local AI Integration
 import { ModelManager } from './services/ModelManager'
 import { AIService } from './services/AIService'
+import { getOCRService } from './services/OCRService'
 
 let modelManager: ModelManager
 let aiService: AIService
@@ -331,16 +330,19 @@ async function initializePhase3() {
 async function generateSolution(
   capturedText: string,
   relevantDocs: Array<{ docName: string; text: string; score: number }>
-): Promise<string> {
+): Promise<{ solution: string; sources: string[] }> {
+  // Extract unique source document names
+  const sources = [...new Set(relevantDocs.map(doc => doc.docName))]
+
   // Check AI readiness
   if (!aiService || !aiService.isInitialized()) {
     if (aiInitError) {
-      return `AI unavailable: ${aiInitError}\n\nPlease restart the app or check logs.`
+      return { solution: `AI unavailable: ${aiInitError}\n\nPlease restart the app or check logs.`, sources }
     }
     if (aiInitializing) {
-      return 'AI model is initializing... This may take several minutes on first launch (downloading 2.4GB model). Please wait and try again.'
+      return { solution: 'AI model is initializing... This may take several minutes on first launch (downloading 2.4GB model). Please wait and try again.', sources }
     }
-    return 'AI service not initialized. Please restart the app.'
+    return { solution: 'AI service not initialized. Please restart the app.', sources }
   }
 
   try {
@@ -371,13 +373,13 @@ Please analyze this and provide a solution or explanation.`
     const validation = validateAIResponse(solution, relevantDocs)
     if (!validation.isValid && validation.warning) {
       console.warn('⚠️ Validation warning:', validation.warning)
-      return `${solution}\n\n${validation.warning}`
+      return { solution: `${solution}\n\n${validation.warning}`, sources }
     }
 
-    return solution
+    return { solution, sources }
   } catch (error) {
     console.error('Local AI error:', error)
-    return `Error generating solution: ${error instanceof Error ? error.message : 'Unknown error'}`
+    return { solution: `Error generating solution: ${error instanceof Error ? error.message : 'Unknown error'}`, sources }
   }
 }
 
@@ -392,32 +394,52 @@ function buildSystemPrompt(options: {
   const { relevantDocs, captureContext } = options
 
   // Base prompt with anti-hallucination rules
-  const baseRules = `You are a documentation assistant. Your ONLY job is to extract and present information EXACTLY as it appears in the provided documentation.
+//   const baseRules = `You are a documentation assistant. Your ONLY job is to extract and present information EXACTLY as it appears in the provided documentation.
 
-CRITICAL RULES (NEVER VIOLATE):
-1. If information is NOT in the documentation below, say "I cannot find this information in the documentation"
-2. NEVER make up, infer, or generate information
-3. NEVER complete incomplete information - if steps are cut off, stop there
-4. ONLY use direct quotes and exact information from the documentation
-5. If you're unsure, say you don't know
+// CRITICAL RULES (NEVER VIOLATE):
+// 1. If information is NOT in the documentation below, say "I cannot find this information in the documentation"
+// 2. NEVER make up, infer, or generate information
+// 3. NEVER complete incomplete information - if steps are cut off, stop there
+// 4. ONLY use direct quotes and exact information from the documentation
+// 5. If you're unsure, say you don't know
 
-FORMAT YOUR RESPONSE:
-- Put procedure titles on their own line (no number before the title)
-- Put each step on a new line with proper numbering (1., 2., 3.)
-- Add blank lines between sections
-- Include ALL steps EXACTLY as written in the documentation
-- Stop immediately when the documentation ends - do NOT continue or complete the thought
+// FORMAT YOUR RESPONSE:
+// - Put procedure titles on their own line (no number before the title)
+// - Put each step on a new line with proper numbering (1., 2., 3.)
+// - Add blank lines between sections
+// - Include ALL steps EXACTLY as written in the documentation
+// - Stop immediately when the documentation ends - do NOT continue or complete the thought
 
-CITE SOURCES:
-- Always cite: [Source: filename.pdf]
-- Never add attributions or signatures
+// CITE SOURCES:
+// - Always cite: [Source: filename.pdf]
+// - Never add attributions or signatures
 
-WHAT YOU MUST NEVER DO:
-- ❌ Add information not explicitly in the documentation
-- ❌ Summarize or paraphrase - use exact wording
-- ❌ Add generic advice or best practices
-- ❌ Complete truncated procedures
-- ❌ Add attributions or signatures`
+// WHAT YOU MUST NEVER DO:
+// - ❌ Add information not explicitly in the documentation
+// - ❌ Summarize or paraphrase - use exact wording
+// - ❌ Add generic advice or best practices
+// - ❌ Complete truncated procedures
+// - ❌ Add attributions or signatures`
+
+  const baseRules = `You are a private, local documentation assistant. Your goal is to answer the user's query using ONLY the provided Reference Documentation.
+
+### INSTRUCTIONS:
+1.  **Analyze the Query:** Identify the user's intent based on the snippet or question provided. The user query is a snippet from a screen. Ignore minor OCR errors or typos and match the intent to the documentation.
+2.  **Search Context:** Look for the answer strictly within the <context> tags below.
+3.  **Strict Adherence:** Answer using ONLY the provided text. **Do not** use outside knowledge to expand on definitions or concepts. If the source text provides only a brief definition, single sentence, or short bullet point, output it exactly as written without adding further explanation.
+4.  **Answer:** Provide the specific steps, solution, or explanation found in the context.
+5.  **Stay Grounded:** If the exact answer is not in the context, state: "Information not found in current documentation."
+6.  **Format:** Use clear Markdown lists for steps. Keep the tone neutral and professional.
+
+### REFERENCE DOCUMENTATION:
+<context>
+{{RAG_CONTEXT_GOES_HERE}}
+</context>
+
+### USER SNIPPET/QUERY:
+{{USER_QUERY}}
+
+### RESPONSE:`
 
   // Add capture context if provided
   let contextSection = ''
@@ -493,33 +515,16 @@ function validateAIResponse(
   return { isValid: true }
 }
 
-// Real OCR using Tesseract.js (English + Filipino for Taglish support)
+// OCR using platform-native engines (Windows.Media.Ocr, macOS Vision, or Tesseract fallback)
 async function performRealOCR(imageBuffer: Buffer): Promise<string> {
   try {
-    console.log('Performing real OCR with Tesseract.js (eng+fil)...')
+    const ocrService = getOCRService()
 
-    // Convert buffer to base64 for Tesseract
-    const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`
-
-    const result = await Tesseract.recognize(
-      base64Image,
-      'eng+fil', // English + Filipino for Taglish support
-      {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`)
-          }
-        }
-      }
-    )
-
-    const text = result.data.text.trim()
-    console.log('✅ Real OCR completed. Extracted text length:', text.length)
-
-    if (text.length === 0) {
-      console.log('⚠️ No text detected in image')
-      return '(No text detected in captured region)'
-    }
+    // Use OCR service with English + Filipino language support
+    const text = await ocrService.recognize(imageBuffer, {
+      languages: ['eng', 'fil'], // English + Filipino for Taglish support
+      recognitionLevel: 'fast'
+    })
 
     return text
   } catch (error) {
@@ -550,7 +555,9 @@ function searchDocuments(query: string, topK: number = 5): Array<{ docName: stri
       // Count matching keywords
       let score = 0
       for (const word of queryWords) {
-        const regex = new RegExp(`\\b${word}\\w*`, 'gi')
+        // Escape special regex characters to prevent invalid regex errors
+        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const regex = new RegExp(`\\b${escapedWord}\\w*`, 'gi')
         const matches = chunkText.match(regex)
         if (matches) {
           score += matches.length
@@ -728,9 +735,11 @@ app.whenReady().then(async () => {
     console.log(`📝 Settings updated with working shortcut: ${shortcutResult.shortcut}`)
   }
 
-  // OCR is now on-demand using Tesseract.js
+  // Initialize OCR service (platform-aware: Windows.Media.Ocr, macOS Vision, or Tesseract)
+  const ocrService = getOCRService()
+  const engineInfo = ocrService.getEngineInfo()
   ocrReady = true
-  console.log('✅ Tesseract.js OCR ready (on-demand recognition)')
+  console.log(`✅ OCR ready: ${engineInfo.engine} on ${engineInfo.platform}`)
 
   // Initialize Phase 2 systems (in background)
   initializePhase2()
@@ -779,7 +788,7 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
     await new Promise(resolve => setTimeout(resolve, 100))
 
     // Get all available screens
-    const sources = await desktopCapturer.getSources({
+    const screenSources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: {
         width: screen.getPrimaryDisplay().size.width,
@@ -787,12 +796,12 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
       }
     })
 
-    if (sources.length === 0) {
+    if (screenSources.length === 0) {
       throw new Error('No screen sources available')
     }
 
     // Get the first screen (primary display)
-    const screenSource = sources[0]
+    const screenSource = screenSources[0]
     const screenshot = screenSource.thumbnail
 
     // Crop the image to the selected bounds
@@ -820,7 +829,7 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
     const imageBase64 = `data:image/png;base64,${imageBuffer.toString('base64')}`
 
     // Generate AI solution (Phase 3)
-    const aiSolution = await generateSolution(text, relevantDocs)
+    const { solution: aiSolution, sources } = await generateSolution(text, relevantDocs)
 
     // Send the result to the main window
     if (mainWindow) {
@@ -830,7 +839,8 @@ ipcMain.handle('capture-screenshot', async (event, bounds: { x: number; y: numbe
         timestamp: new Date().toISOString(),
         relevantDocs: relevantDocs,
         image: imageBase64,
-        aiSolution: aiSolution
+        aiSolution: aiSolution,
+        sources: sources
       })
     }
 
@@ -955,9 +965,13 @@ ipcMain.handle('chat-followup', async (event, data: {
       finalReply = `${reply}\n\n${validation.warning}`
     }
 
+    // Extract unique source document names
+    const sources = [...new Set(relevantDocs.map(doc => doc.docName))]
+
     return {
       success: true,
       reply: finalReply,
+      sources: sources,
       generatedTitle: generatedTitle
     }
   } catch (error) {

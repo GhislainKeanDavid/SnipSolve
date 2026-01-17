@@ -212,7 +212,8 @@ function MainWindow() {
       if (capture?.aiSolution) {
         initialHistory.push({
           role: 'assistant',
-          content: capture.aiSolution
+          content: capture.aiSolution,
+          sources: capture.sources
         })
       }
 
@@ -296,7 +297,7 @@ function MainWindow() {
           c.id === activeConversationId
             ? {
                 ...c,
-                chatHistory: [...updatedHistory, { role: 'assistant', content: response.reply! }],
+                chatHistory: [...updatedHistory, { role: 'assistant', content: response.reply!, sources: response.sources }],
                 title: response.generatedTitle || c.title
               }
             : c
@@ -433,50 +434,20 @@ function MainWindow() {
   }
 
   // Render message content with clickable source links
-  const renderMessageWithSources = (content: string) => {
-    // Match patterns like:
-    // [Source: docname.pdf], [From docname.pdf], [docname.pdf]:, [docname.pdf]
-    const sourcePattern = /\[(?:Source:\s*|From\s+)?([^\]]+\.(?:pdf|txt|md))\](?::)?/gi
-    const parts: Array<{ type: 'text' | 'source'; content: string }> = []
-    let lastIndex = 0
-    let match
-    const sources: string[] = []
-
-    while ((match = sourcePattern.exec(content)) !== null) {
-      // Add text before the match
-      if (match.index > lastIndex) {
-        parts.push({ type: 'text', content: content.slice(lastIndex, match.index) })
-      }
-      // Collect source for display at end
-      sources.push(match[1])
-      lastIndex = match.index + match[0].length
-    }
-
-    // Add remaining text
-    if (lastIndex < content.length) {
-      parts.push({ type: 'text', content: content.slice(lastIndex) })
-    }
-
-    // If no sources found, return plain text
-    if (sources.length === 0) {
+  const renderMessageWithSources = (content: string, sources?: string[]) => {
+    // If no sources provided, return plain text
+    if (!sources || sources.length === 0) {
       return <span className="whitespace-pre-wrap">{content}</span>
     }
 
-    // Get unique sources
-    const uniqueSources = [...new Set(sources)]
-
     return (
       <div>
-        <span className="whitespace-pre-wrap">
-          {parts.map((part, idx) => (
-            <span key={idx}>{part.content}</span>
-          ))}
-        </span>
+        <span className="whitespace-pre-wrap">{content}</span>
         {/* Sources section with spacing */}
         <div className="mt-3 pt-3 border-t border-gray-700/50">
           <p className="text-xs text-gray-500 mb-2">Sources:</p>
           <div className="flex flex-wrap gap-2">
-            {uniqueSources.map((source, idx) => (
+            {sources.map((source, idx) => (
               <button
                 key={idx}
                 onClick={() => navigateToDocument(source)}
@@ -817,7 +788,7 @@ function MainWindow() {
                             </div>
                             <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-4">
                               <div className="text-sm text-gray-200">
-                                {renderMessageWithSources(result.aiSolution)}
+                                {renderMessageWithSources(result.aiSolution, result.sources)}
                               </div>
                             </div>
                           </div>
@@ -1195,7 +1166,7 @@ function MainWindow() {
                         >
                           <div className="text-sm">
                             {msg.role === 'assistant'
-                              ? renderMessageWithSources(msg.content)
+                              ? renderMessageWithSources(msg.content, msg.sources)
                               : <span className="whitespace-pre-wrap">{msg.content}</span>
                             }
                           </div>
